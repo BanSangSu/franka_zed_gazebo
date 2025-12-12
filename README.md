@@ -37,7 +37,7 @@ docker run -it \
     --net=host \
     --privileged \
     --runtime=nvidia \
-    bandi0605/rheinrobot:only_zed_init \
+    bandi0605/rheinrobot:init_with_static_zed \
     bash
 ```
 
