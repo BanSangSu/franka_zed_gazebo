@@ -119,8 +119,17 @@
   <!-- 2. Spawn Camera -->
   <node pkg="franka_zed_gazebo" name="spawn_zed2_camera" type="spawn_static_zed2_camera.py" output="screen"/>
 
+  <!-- 3. Camera State Publisher -->
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="camera_state_publisher">
+      <!-- CRITICAL: Remap 'robot_description' (what the node looks for) 
+      to 'static_camera_description' (what you loaded) -->
+      <remap from="robot_description" to="static_camera_description" />
+      
+      <param name="publish_frequency" type="double" value="30.0" />
+      <remap from="joint_states" to="/camera/joint_states" /> 
+  </node>
 
-  <!-- 3. Link World to Camera -->
+  <!-- 4. Link World to Camera -->
   <!-- Adjust these numbers (1.0 0.0 0.5 0 3.14 0) to MATCH your spawn_static_zed2_camera.py script! -->
   <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_camera_tf"
         args="1.0 0.0 0.5 0 3.14 0 world world_interface_link" />
