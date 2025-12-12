@@ -1,7 +1,7 @@
 # Franka Zed Gazebo
 ### An educational simulation workspace for picking and placing with the Franka Emika Panda Robot
 
-This repository contains the necessary files to launch a gazebo simulation of the Franka Panda set in the Pearl lab with the ZED2 camera attached to the end effector. 
+This repository is a fork of the ['pearl-robot-lab/franka_zed_gazebo'](https://github.com/pearl-robot-lab/franka_zed_gazebo) GitHub repository. It contains the necessary files to launch a gazebo simulation of the Franka Panda set in the Pearl lab with the ZED2 camera attached to the end effector. 
 
 <p align="center">
   <img src="images/gazebo.png" width="600"/>
@@ -9,36 +9,36 @@ This repository contains the necessary files to launch a gazebo simulation of th
 
 ## Docker
 
-To launch the simulation, you will need a few packages including [`libfranka`](https://frankaemika.github.io/docs/installation_linux.html), [`franka_ros`](https://frankaemika.github.io/docs/installation_linux.html), [MoveIt!](https://ros-planning.github.io/moveit_tutorials/doc/getting_started/getting_started.html) and [`panda_moveit_config`](http://wiki.ros.org/panda_moveit_config). For convenience, you can install a docker and pull images with the necessary packages.
+To launch the simulation, you will need a few packages including [`libfranka`](https://frankaemika.github.io/docs/installation_linux.html), [`franka_ros`](https://frankaemika.github.io/docs/installation_linux.html), [MoveIt!](https://ros-planning.github.io/moveit_tutorials/doc/getting_started/getting_started.html), [`panda_moveit_config`](http://wiki.ros.org/panda_moveit_config), and [`zed-ros-wrapper`](https://github.com/stereolabs/zed-ros-wrapper). For convenience, you can install a docker and pull images with the necessary packages.
 
-For installing the docker, you can follow the instructions [here](https://github.com/pearl-robot-lab/Docker_env). 
-
-Then you can pull the images.
+For installing the docker, you can pull the images.
 
 * If your PC has an NVIDIA GPU, you can run:
 ```
-docker pull 3liyounes/pearl_robots:franka
-```
-
-* If your PC does not have an NVIDIA GPU, you can run:
-```
-docker pull 3liyounes/pearl_robots:franka_wo_nvidia
-```
-
-* If you want to test in the real robot with ZED2 camera, you can run:
-```
-docker pull 3liyounes/pearl_robots:franka_real
+docker pull bandi0605/rheinrobot:init_with_static_zed
 ```
 
 Remember to allow any external program X11 to access the GUI: 
 ```
-xhost +
+xhost +local:docker
 ```
 
 Create a container with a name to contain the pulled image (only once!)
 ```
-source ~/.bashrc
-docker_run_nvidia --name=container_name 3liyounes/pearl_robots:image_name bash
+docker run -it \
+    --name rheinrobot_franka_project \
+    --env="DISPLAY=$DISPLAY" \
+    --env="QT_X11_NO_MITSHM=1" \
+    --env="NVIDIA_DRIVER_CAPABILITIES=all" \
+    --env="LIBGL_ALWAYS_SOFTWARE=0" \
+    --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
+    --env="XAUTHORITY=$XAUTH" \
+    --volume="$XAUTH:$XAUTH" \
+    --net=host \
+    --privileged \
+    --runtime=nvidia \
+    bandi0605/rheinrobot:only_zed_init \
+    bash
 ```
 
 Now you are within the docker workspace. If you want to access the workspace in a new terminal, just run:
