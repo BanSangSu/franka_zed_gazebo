@@ -1,11 +1,9 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="static_zed2_camera">
 
-    <!-- <joint name="zed2_holder_joint" type="fixed">
-        <parent link="panda_hand"/>
-        <child link="zed2_holder"/>
-        <origin xyz="0 0 0" rpy="${pi} 0 0"/>
-    </joint> -->
+    <gazebo>
+        <static>false</static>
+    </gazebo>
 
     <!-- 1. DUMMY ROOT LINK (The "World" anchor for this model) -->
     <link name="world_interface_link"/>
@@ -34,6 +32,11 @@
         </visual>
     </link>
 
+    <!-- Disable gravity for camera holder -->
+    <gazebo reference="static_zed2_holder">
+        <gravity>false</gravity>
+    </gazebo>
+
     <joint name="camera_joint" type="fixed">
         <parent link="static_zed2_holder"/>
         <child link="static_zed2_camera_link"/>
@@ -61,6 +64,11 @@
             </geometry>
         </collision>
     </link>
+
+    <!-- Disable gravity for main camera link -->
+    <gazebo reference="static_zed2_camera_link">
+        <gravity>false</gravity>
+    </gazebo>
 
     <!-- Left Camera -->
     <joint name="left_camera_joint" type="fixed">
@@ -96,11 +104,11 @@
 
     <link name="static_zed2_right_camera_link_optical"></link>
 
-
     <!-- Left/Depth camera -->
     <gazebo reference="static_zed2_left_camera_link">
     <!-- Raw images (with lens distortion) -->
         
+        <gravity>false</gravity>
         <material>Gazebo/Red</material>
 
         <sensor name="static_zed2_left_raw_camera" type="camera">
@@ -195,6 +203,9 @@
     <!-- Right camera -->
     <gazebo reference="static_zed2_right_camera_link">
     <!-- Raw images (with lens distortion) -->
+        
+        <gravity>false</gravity>
+        
         <sensor name="static_zed2_right_raw_camera" type="camera">
             <pose> 0 0 0 0 0 0 </pose>
             <visualize>false</visualize>
@@ -295,8 +306,12 @@
       </sensor>
     </gazebo>
 
-     <gazebo>
-        <static>true</static>
-    </gazebo>
-
 </robot>
+
+
+
+    <!-- <joint name="zed2_holder_joint" type="fixed">
+        <parent link="panda_hand"/>
+        <child link="zed2_holder"/>
+        <origin xyz="0 0 0" rpy="${pi} 0 0"/>
+    </joint> -->
