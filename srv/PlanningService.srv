@@ -1,0 +1,11 @@
+# Request
+geometry_msgs/Pose target_pose
+string planning_group
+string action                  # "MOVE", "ATTACH", "DETACH"
+string object_name             # ID of the object to attach/detach
+string allowed_collision_object # ID of object allowed to collide with (for grasping)
+---
+# Response
+bool success
+string message
+moveit_msgs/RobotTrajectory trajectory

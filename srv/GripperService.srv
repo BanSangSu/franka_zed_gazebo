@@ -1,0 +1,9 @@
+# Request
+bool open
+float64 width      # Target grasp width in meters (only used when open=false). 0 = fully close.
+float64 force      # Grasp force in Newtons (0 = use default ~20N)
+---
+# Response
+bool success
+string message
+float64 final_width  # Actual gripper width after operation

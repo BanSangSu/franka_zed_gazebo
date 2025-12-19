@@ -65,15 +65,22 @@ class Florence2Detector(BaseDetector):
         task_prompt = "<CAPTION_TO_PHRASE_GROUNDING>"
         full_prompt = task_prompt + prompt if prompt else task_prompt
         
-        inputs = self.processor(text=full_prompt, images=image, return_tensors="pt").to(self.device, self.torch_dtype)
-        generated_ids = self.model.generate(
-            input_ids=inputs["input_ids"], pixel_values=inputs["pixel_values"],
-            max_new_tokens=1024, num_beams=3, do_sample=False
-        )
-        generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-        parsed_answer = self.processor.post_process_generation(
-            generated_text, task=task_prompt, image_size=(image.width, image.height)
-        )
+        with torch.no_grad():
+            inputs = self.processor(text=full_prompt, images=image, return_tensors="pt").to(self.device, self.torch_dtype)
+            generated_ids = self.model.generate(
+                input_ids=inputs["input_ids"], pixel_values=inputs["pixel_values"],
+                max_new_tokens=1024, num_beams=3, do_sample=False
+            )
+            generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+            parsed_answer = self.processor.post_process_generation(
+                generated_text, task=task_prompt, image_size=(image.width, image.height)
+            )
+            
+            # Free up immediate memory
+            del inputs
+            del generated_ids
+            torch.cuda.empty_cache()
+            
         grounding_data = parsed_answer.get(task_prompt, {})
         bboxes = grounding_data.get('bboxes', [])
         return {
@@ -177,8 +184,9 @@ class DINODetector(BaseDetector):
 
 class MultiDetectorSAM:
     def __init__(self, detector_type: str = "florence2", detector_config: Dict = None, 
-                 sam_checkpoint: str = "sam_vit_h_4b8939.pth", sam_model_type: str = "vit_h"):
+                 sam_checkpoint: str = None, sam_model_type: str = "vit_b", use_sam: bool = False):
         self.detector_type = detector_type
+        self.use_sam = use_sam
         detector_config = detector_config or {}
         
         if detector_type == "florence2":
@@ -191,10 +199,15 @@ class MultiDetectorSAM:
             self.detector = DINODetector(detector_config.get("model_name", "facebook/dinov2-base"))
         else:
             raise ValueError(f"Unknown detector: {detector_type}")
+        
+
+        # Join it with the checkpoint filename
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        sam_checkpoint = os.path.join(current_dir, "sam_vit_b_01ec64.pth")
             
-        if SAM_AVAILABLE:
+        if SAM_AVAILABLE and self.use_sam and sam_checkpoint:
             self.device = self.detector.device
-            if os.path.exists(sam_checkpoint): # wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+            if os.path.exists(sam_checkpoint):
                 rospy.loginfo(f"Loading SAM from {sam_checkpoint}...")
                 sam = sam_model_registry[sam_model_type](checkpoint=sam_checkpoint)
                 sam.to(device=self.device)
@@ -202,8 +215,6 @@ class MultiDetectorSAM:
                 rospy.loginfo("SAM loaded!")
             else:
                 rospy.logwarn(f"SAM checkpoint not found: {sam_checkpoint}")
-                # Try loading without checkpoint if possible or fail?
-                # Usually need checkpoint.
                 self.sam_predictor = None
         else:
             self.sam_predictor = None
@@ -225,10 +236,14 @@ class MultiDetectorSAM:
         
         masks = []
         if self.sam_predictor and detection['found']:
-            self.sam_predictor.set_image(image_np)
-            for bbox in detection['bboxes']:
-                # Ensure bbox is [x1, y1, x2, y2]
-                mask, _, _ = self.sam_predictor.predict(box=np.array(bbox)[None, :], multimask_output=False)
-                masks.append(mask[0])
+            with torch.no_grad():
+                self.sam_predictor.set_image(image_np)
+                for bbox in detection['bboxes']:
+                    # Ensure bbox is [x1, y1, x2, y2]
+                    mask, _, _ = self.sam_predictor.predict(box=np.array(bbox)[None, :], multimask_output=False)
+                    masks.append(mask[0])
+                
+                # Clear SAM cache
+                torch.cuda.empty_cache()
                 
         return {'detector': self.detector_type, 'detection': detection, 'segmentation': {'masks': masks, 'num_masks': len(masks)}}

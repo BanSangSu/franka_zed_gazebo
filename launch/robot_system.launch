@@ -1,0 +1,26 @@
+<launch>
+  <!-- Start perception service -->
+  <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node.py" output="screen">
+    <rosparam command="load" file="$(find franka_zed_gazebo)/config/perception_params.yaml"/>
+  </node>
+
+  <!-- Start MoveIt move_group
+  <include file="$(find franka_zed_gazebo)/launch/moveit_gazebo_panda.launch"/> -->
+
+  <!-- Start planning service -->
+  <node name="planning_service" pkg="franka_zed_gazebo" type="planning_service_node.py" output="screen">
+    <param name="planning_group" value="panda_manipulator"/>
+  </node>
+
+  <!-- Start control service -->
+  <node name="control_service" pkg="franka_zed_gazebo" type="control_service_node.py" output="screen">
+    <param name="planning_group" value="panda_manipulator"/>
+  </node>
+
+  
+  <!-- Start orchestrator -->
+  <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrator_node.py" output="screen"/>
+  
+  <!-- SMACH Viewer -->
+  <!-- <node name="smach_viewer" pkg="smach_viewer" type="smach_viewer.py"/> -->
+</launch>

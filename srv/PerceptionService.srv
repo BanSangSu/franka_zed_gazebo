@@ -1,0 +1,10 @@
+# Request
+bool trigger
+---
+# Response
+bool success
+string message
+int32 num_cubes
+geometry_msgs/PoseArray cube_poses
+float32[] confidences
+geometry_msgs/Vector3[] dimensions
