@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-
-
 import rospy
 from cv_bridge import CvBridge, CvBridgeError
 import message_filters

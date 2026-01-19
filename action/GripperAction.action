@@ -1,0 +1,21 @@
+# Goal: Control gripper (open/close/grasp)
+# Supports both force-controlled grasping (real robot) and position control (simulation)
+
+bool open              # True: open gripper, False: close/grasp
+float32 width          # Target width between fingers (meters), 0 for full close
+float32 force          # Grasping force (Newtons), ignored if open=true
+
+---
+
+# Result: Gripper operation outcome
+bool success           # True if operation succeeded
+string message         # Detailed result message
+float32 final_width    # Final gripper width after operation (meters)
+
+---
+
+# Feedback: Real-time gripper operation progress
+float32 progress       # Operation progress [0.0 to 1.0]
+string status          # Human-readable status message
+float32 current_width  # Current gripper width (meters)
+
