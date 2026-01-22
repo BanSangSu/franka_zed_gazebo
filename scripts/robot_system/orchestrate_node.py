@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Advanced Orchestrator Node - Reactive Behavior Tree for Manipulation
+Orchestrator Node - Behavior Tree with Custom Retry Decorator
 Compatible with py_trees 0.7.6 (ROS Noetic)
+Includes custom Retry decorator for robustness
 """
 
 import rospy
@@ -24,72 +25,129 @@ from franka_zed_gazebo.msg import (
 # CONFIGURATION
 ###############################################################################
 
-class RobotConfig:
-    """Robot workspace and manipulation parameters"""
-    # Workspace
-    BASE_POSITION = (0.5, 0.0, 0.0225)
+class Config:
+    """Robot configuration"""
+    BASE_X = 0.5
+    BASE_Y = 0.0
+    BASE_Z = 0.0225
     CUBE_SIZE = 0.045
     
-    # Approach heights
     SAFE_HEIGHT = 0.15
     GRASP_HEIGHT = 0.01
     PLACE_HEIGHT = 0.01
     
-    # Gripper
     GRIPPER_OPEN_WIDTH = 0.08
     GRIPPER_FORCE = 30.0
     GRIPPER_WIDTH_MARGIN = 0.005
     MIN_GRIPPER_WIDTH = 0.01
     
-    # Orientation (top-down grasp)
-    GRASP_ORIENTATION = [1.0, 0.0, 0.0, 0.0]
+    GRASP_QUAT = [1.0, 0.0, 0.0, 0.0]
     
-    # Retry parameters
-    MAX_GRASP_RETRIES = 2
-    MAX_PLAN_RETRIES = 3
+    # Retry configuration
+    MAX_PICK_RETRIES = 2
+    MAX_PLACE_RETRIES = 3
 
 
-class TaskPattern(Enum):
-    """Supported manipulation patterns"""
+class Pattern(Enum):
+    """Task patterns"""
     STACK = "STACK"
     PYRAMID = "PYRAMID"
     LINE = "LINE"
 
 
 ###############################################################################
-# BLACKBOARD KEYS
+# CUSTOM RETRY DECORATOR
+###############################################################################
+
+class Retry(py_trees.decorators.Decorator):
+    """
+    Custom Retry Decorator for py_trees 0.7.6
+    
+    Retries the child behavior on FAILURE up to num_failures times.
+    After max retries, returns FAILURE.
+    
+    Args:
+        name: Decorator name
+        child: Child behavior to retry
+        num_failures: Maximum number of retry attempts (default: 3)
+    """
+    
+    def __init__(self, name, child, num_failures=3):
+        super(Retry, self).__init__(name=name, child=child)
+        self.num_failures = num_failures
+        self.count = 0
+    
+    def initialise(self):
+        """Reset retry counter when decorator starts"""
+        self.count = 0
+    
+    def update(self):
+        """
+        Retry logic:
+        - If child succeeds: return SUCCESS
+        - If child fails: retry if under limit, else return FAILURE
+        - If child running: return RUNNING
+        """
+        child_status = self.decorated.status
+        
+        if child_status == py_trees.common.Status.SUCCESS:
+            self.feedback_message = "Child succeeded"
+            return py_trees.common.Status.SUCCESS
+        
+        elif child_status == py_trees.common.Status.FAILURE:
+            self.count += 1
+            
+            if self.count < self.num_failures:
+                # Reset child and retry
+                rospy.logwarn(f"[{self.name}] Retry {self.count}/{self.num_failures}")
+                self.decorated.stop(py_trees.common.Status.INVALID)
+                self.decorated.setup(timeout=15)
+                self.feedback_message = f"Retry {self.count}/{self.num_failures}"
+                return py_trees.common.Status.RUNNING
+            else:
+                # Max retries exhausted
+                rospy.logerr(f"[{self.name}] Failed after {self.num_failures} attempts")
+                self.feedback_message = f"Failed after {self.num_failures} attempts"
+                return py_trees.common.Status.FAILURE
+        
+        else:  # RUNNING
+            return py_trees.common.Status.RUNNING
+
+
+###############################################################################
+# BLACKBOARD
 ###############################################################################
 
 class BB:
-    """Blackboard key namespace"""
+    """Blackboard keys"""
     CUBES = "cubes"
     GOALS = "goals"
-    GOAL_INDEX = "goal_idx"
-    COMPLETED_GOALS = "completed"
-    SELECTED_CUBE = "selected_cube"
-    TARGET_POSE = "target_pose"
-    PLANNED_TRAJECTORY = "trajectory"
-    ALLOWED_COLLISION = "allowed_collision"
+    GOAL_IDX = "goal_idx"
+    COMPLETED = "completed"
+    SELECTED_CUBE = "cube"
+    TARGET_POSE = "target"
+    TRAJECTORY = "traj"
+    COLLISION = "collision"
 
 
 def init_blackboard():
-    """Initialize blackboard with default values"""
-    blackboard = py_trees.blackboard.Blackboard()
-    blackboard.set(BB.CUBES, [])
-    blackboard.set(BB.GOALS, [])
-    blackboard.set(BB.GOAL_INDEX, 0)
-    blackboard.set(BB.COMPLETED_GOALS, set())
-    blackboard.set(BB.PLANNED_TRAJECTORY, None)
-    blackboard.set(BB.ALLOWED_COLLISION, "")
-    return blackboard
+    """Initialize blackboard"""
+    bb = py_trees.blackboard.Blackboard()
+    bb.set(BB.CUBES, [])
+    bb.set(BB.GOALS, [])
+    bb.set(BB.GOAL_IDX, 0)
+    bb.set(BB.COMPLETED, set())
+    bb.set(BB.TRAJECTORY, None)
+    bb.set(BB.COLLISION, "")
+    return bb
 
 
 ###############################################################################
-# UTILITY FUNCTIONS
+# UTILITIES
 ###############################################################################
 
-def quaternion_multiply(q1, q2):
-    """Multiply two quaternions [x,y,z,w]"""
+def quat_mult(q1, q2):
+    """Multiply quaternions [x,y,z,w]"""
     x1, y1, z1, w1 = q1
     x2, y2, z2, w2 = q2
     return [
@@ -100,624 +158,476 @@ def quaternion_multiply(q1, q2):
     ]
 
 
-def create_pose(x, y, z, quat=None):
-    """Create Pose message"""
-    pose = Pose()
-    pose.position.x, pose.position.y, pose.position.z = x, y, z
-    if quat is None:
-        pose.orientation.w = 1.0
+def make_pose(x, y, z, quat=None):
+    """Create Pose"""
+    p = Pose()
+    p.position.x, p.position.y, p.position.z = x, y, z
+    if quat:
+        p.orientation.x, p.orientation.y = quat[0], quat[1]
+        p.orientation.z, p.orientation.w = quat[2], quat[3]
     else:
-        pose.orientation.x, pose.orientation.y = quat[0], quat[1]
-        pose.orientation.z, pose.orientation.w = quat[2], quat[3]
-    return pose
+        p.orientation.w = 1.0
+    return p
 
 
-def offset_pose(base_pose, dx=0, dy=0, dz=0, orientation=None):
-    """Create offset pose with optional orientation override"""
-    pose = deepcopy(base_pose)
-    pose.position.x += dx
-    pose.position.y += dy
-    pose.position.z += dz
+def offset_pose(pose, dx=0, dy=0, dz=0, quat=None):
+    """Offset pose"""
+    p = deepcopy(pose)
+    p.position.x += dx
+    p.position.y += dy
+    p.position.z += dz
     
-    if orientation is not None:
-        orig_q = [base_pose.orientation.x, base_pose.orientation.y,
-                 base_pose.orientation.z, base_pose.orientation.w]
-        new_q = quaternion_multiply(orig_q, orientation)
-        pose.orientation.x, pose.orientation.y = new_q[0], new_q[1]
-        pose.orientation.z, pose.orientation.w = new_q[2], new_q[3]
+    if quat:
+        orig = [pose.orientation.x, pose.orientation.y,
+                pose.orientation.z, pose.orientation.w]
+        new = quat_mult(orig, quat)
+        p.orientation.x, p.orientation.y = new[0], new[1]
+        p.orientation.z, p.orientation.w = new[2], new[3]
     
-    return pose
+    return p
 
-
-class RetryDecorator(py_trees.decorators.Decorator):
-    """
-    Custom Retry decorator for py_trees 0.7.6
-    Retries child behavior on failure up to num_failures times
-    """
-    
-    def __init__(self, name, child, num_failures=3):
-        super(RetryDecorator, self).__init__(name=name, child=child)
-        self.num_failures = num_failures
-        self.failure_count = 0
-    
-    def initialise(self):
-        """Reset failure counter"""
-        self.failure_count = 0
-    
-    def update(self):
-        """Retry logic"""
-        if self.decorated.status == py_trees.common.Status.FAILURE:
-            self.failure_count += 1
-            
-            if self.failure_count < self.num_failures:
-                # Reset child and retry
-                self.decorated.stop(py_trees.common.Status.INVALID)
-                self.decorated.setup(timeout=15)
-                self.feedback_message = f"Retry {self.failure_count}/{self.num_failures}"
-                rospy.logwarn(f"[{self.name}] {self.feedback_message}")
-                return py_trees.common.Status.RUNNING
-            else:
-                # Max retries reached
-                self.feedback_message = f"Failed after {self.num_failures} attempts"
-                rospy.logerr(f"[{self.name}] {self.feedback_message}")
-                return py_trees.common.Status.FAILURE
-        
-        elif self.decorated.status == py_trees.common.Status.RUNNING:
-            return py_trees.common.Status.RUNNING
-        
-        else:  # SUCCESS
-            self.feedback_message = "Success"
-            return py_trees.common.Status.SUCCESS
 
 ###############################################################################
 # PATTERN GENERATORS
 ###############################################################################
 
-class PatternGenerator:
-    """Generate goal poses for different patterns"""
+def generate_stack(n):
+    """Vertical stack"""
+    goals = []
+    for i in range(int(n)):
+        goals.append(make_pose(
+            Config.BASE_X,
+            Config.BASE_Y,
+            Config.BASE_Z + i * Config.CUBE_SIZE
+        ))
+    return goals
+
+
+def generate_pyramid():
+    """3-2-1 pyramid"""
+    goals = []
+    x, y, z = Config.BASE_X, Config.BASE_Y, Config.BASE_Z
+    cs = Config.CUBE_SIZE
     
-    @staticmethod
-    def generate(pattern_type, value):
-        """Generate list of goal poses"""
-        generators = {
-            TaskPattern.STACK: PatternGenerator._stack,
-            TaskPattern.PYRAMID: PatternGenerator._pyramid,
-            TaskPattern.LINE: PatternGenerator._line,
-        }
-        return generators[pattern_type](value)
+    for yo in [-cs, 0, cs]:
+        goals.append(make_pose(x, y + yo, z))
+    for yo in [-cs/2, cs/2]:
+        goals.append(make_pose(x, y + yo, z + cs))
+    goals.append(make_pose(x, y, z + 2*cs))
     
-    @staticmethod
-    def _stack(num_cubes):
-        """Vertical stack of N cubes"""
-        goals = []
-        x, y, z = RobotConfig.BASE_POSITION
-        for i in range(int(num_cubes)):
-            pose = create_pose(x, y, z + i * RobotConfig.CUBE_SIZE)
-            goals.append(pose)
-        return goals
+    return goals
+
+
+def generate_line(n):
+    """Horizontal line"""
+    goals = []
+    x, y, z = Config.BASE_X, Config.BASE_Y, Config.BASE_Z
+    cs = Config.CUBE_SIZE
+    start_y = y - (int(n) - 1) * cs / 2
     
-    @staticmethod
-    def _pyramid(num_cubes):
-        """3-2-1 pyramid structure"""
-        goals = []
-        x, y, z = RobotConfig.BASE_POSITION
-        cube_size = RobotConfig.CUBE_SIZE
-        
-        # Layer 1: 3 cubes
-        for y_offset in [-cube_size, 0, cube_size]:
-            goals.append(create_pose(x, y + y_offset, z))
-        
-        # Layer 2: 2 cubes
-        for y_offset in [-cube_size/2, cube_size/2]:
-            goals.append(create_pose(x, y + y_offset, z + cube_size))
-        
-        # Layer 3: 1 cube
-        goals.append(create_pose(x, y, z + 2*cube_size))
-        return goals
+    for i in range(int(n)):
+        goals.append(make_pose(x, start_y + i * cs, z))
     
-    @staticmethod
-    def _line(num_cubes):
-        """Horizontal line of cubes"""
-        goals = []
-        x, y, z = RobotConfig.BASE_POSITION
-        cube_size = RobotConfig.CUBE_SIZE
-        start_y = y - (int(num_cubes) - 1) * cube_size / 2
-        for i in range(int(num_cubes)):
-            goals.append(create_pose(x, start_y + i * cube_size, z))
-        return goals
+    return goals
 
 
 ###############################################################################
-# BASE BEHAVIOR CLASSES
+# BEHAVIORS
 ###############################################################################
 
-class ServiceBehaviour(py_trees.behaviour.Behaviour):
-    """Base class for ROS service calls"""
-    
-    def __init__(self, name, service_name, service_type):
-        super(ServiceBehaviour, self).__init__(name)
-        self.service_name = service_name
-        self.service_type = service_type
-        self.proxy = None
-        self.blackboard = py_trees.blackboard.Blackboard()
-    
-    def setup(self, timeout):
-        try:
-            rospy.wait_for_service(self.service_name, timeout=timeout)
-            self.proxy = rospy.ServiceProxy(self.service_name, self.service_type)
-            rospy.loginfo(f"[{self.name}] Connected to {self.service_name}")
-            return True
-        except rospy.ROSException as e:
-            rospy.logerr(f"[{self.name}] Service unavailable: {e}")
-            return False
-
-
-class ActionBehaviour(py_trees.behaviour.Behaviour):
-    """Base class for action client behaviors"""
-    
-    def __init__(self, name, action_name, action_type):
-        super(ActionBehaviour, self).__init__(name)
-        self.action_name = action_name
-        self.action_type = action_type
-        self.client = None
-        self.goal_active = False
-        self.blackboard = py_trees.blackboard.Blackboard()
-    
-    def setup(self, timeout):
-        self.client = actionlib.SimpleActionClient(self.action_name, self.action_type)
-        if self.client.wait_for_server(rospy.Duration(timeout)):
-            rospy.loginfo(f"[{self.name}] Connected to {self.action_name}")
-            return True
-        rospy.logerr(f"[{self.name}] Action server unavailable")
-        return False
-    
-    def initialise(self):
-        self.goal_active = False
-    
-    def update(self):
-        if not self.goal_active:
-            goal = self.construct_goal()
-            if goal is None:
-                return py_trees.common.Status.FAILURE
-            self.client.send_goal(goal)
-            self.goal_active = True
-            return py_trees.common.Status.RUNNING
-        
-        state = self.client.get_state()
-        
-        if state == GoalStatus.SUCCEEDED:
-            return self.handle_success(self.client.get_result())
-        elif state in [GoalStatus.ABORTED, GoalStatus.REJECTED]:
-            return self.handle_failure()
-        
-        return py_trees.common.Status.RUNNING
-    
-    def construct_goal(self):
-        """Override to construct specific goal"""
-        raise NotImplementedError
-    
-    def handle_success(self, result):
-        """Override to handle result"""
-        return py_trees.common.Status.SUCCESS
-    
-    def handle_failure(self):
-        """Override to handle failure"""
-        return py_trees.common.Status.FAILURE
-
-
-###############################################################################
-# PERCEPTION
-###############################################################################
-
-class PerceiveCubes(ServiceBehaviour):
-    """Detect cubes in workspace"""
+class Perceive(py_trees.behaviour.Behaviour):
+    """Scan workspace for cubes"""
     
     def __init__(self):
-        super(PerceiveCubes, self).__init__("Perceive", "/perception_service", PerceptionService)
+        super(Perceive, self).__init__("Perceive")
+        self.bb = py_trees.blackboard.Blackboard()
+        self.proxy = None
+    
+    def setup(self, timeout):
+        try:
+            rospy.wait_for_service('/perception_service', timeout=timeout)
+            self.proxy = rospy.ServiceProxy('/perception_service', PerceptionService)
+            rospy.loginfo(f"[{self.name}] Ready")
+            return True
+        except:
+            return False
     
     def update(self):
         try:
-            response = self.proxy(trigger=True)
-            
-            if not response.success:
-                rospy.logwarn(f"[{self.name}] Perception failed: {response.message}")
+            resp = self.proxy(trigger=True)
+            if not resp.success:
                 return py_trees.common.Status.FAILURE
             
             cubes = []
-            for i in range(response.num_cubes):
+            for i in range(resp.num_cubes):
                 cubes.append({
                     'id': i,
-                    'pose': response.cube_poses.poses[i],
-                    'dimensions': response.dimensions[i],
-                    'label': response.labels[i] if i < len(response.labels) else "cube",
-                    'confidence': response.confidences[i] if i < len(response.confidences) else 1.0
+                    'pose': resp.cube_poses.poses[i],
+                    'dimensions': resp.dimensions[i],
+                    'label': resp.labels[i] if i < len(resp.labels) else "cube"
                 })
             
-            self.blackboard.set(BB.CUBES, cubes)
-            rospy.loginfo(f"[{self.name}] Detected {len(cubes)} cubes")
+            self.bb.set(BB.CUBES, cubes)
+            rospy.loginfo(f"[{self.name}] Found {len(cubes)} cubes")
             return py_trees.common.Status.SUCCESS
-            
         except Exception as e:
-            rospy.logerr(f"[{self.name}] Exception: {e}")
+            rospy.logerr(f"[{self.name}] Error: {e}")
             return py_trees.common.Status.FAILURE
 
 
-###############################################################################
-# TASK MANAGEMENT
-###############################################################################
-
-class InitializeTask(py_trees.behaviour.Behaviour):
-    """Initialize task goals"""
+class InitGoals(py_trees.behaviour.Behaviour):
+    """Initialize goal poses"""
     
-    def __init__(self, pattern_type, pattern_value):
-        super(InitializeTask, self).__init__("InitTask")
-        self.pattern_type = pattern_type
-        self.pattern_value = pattern_value
-        self.blackboard = py_trees.blackboard.Blackboard()
+    def __init__(self, pattern, value):
+        super(InitGoals, self).__init__("InitGoals")
+        self.pattern = pattern
+        self.value = value
+        self.bb = py_trees.blackboard.Blackboard()
     
     def update(self):
-        if self.blackboard.get(BB.GOALS):
+        if self.bb.get(BB.GOALS):
             return py_trees.common.Status.SUCCESS
         
-        goals = PatternGenerator.generate(self.pattern_type, self.pattern_value)
-        self.blackboard.set(BB.GOALS, goals)
-        self.blackboard.set(BB.COMPLETED_GOALS, set())
-        self.blackboard.set(BB.GOAL_INDEX, 0)
+        if self.pattern == Pattern.STACK:
+            goals = generate_stack(self.value)
+        elif self.pattern == Pattern.PYRAMID:
+            goals = generate_pyramid()
+        elif self.pattern == Pattern.LINE:
+            goals = generate_line(self.value)
+        else:
+            goals = generate_stack(3)
         
-        rospy.loginfo(f"[{self.name}] Initialized {len(goals)} goals for {self.pattern_type.value}")
+        self.bb.set(BB.GOALS, goals)
+        self.bb.set(BB.COMPLETED, set())
+        self.bb.set(BB.GOAL_IDX, 0)
+        
+        rospy.loginfo(f"[{self.name}] Created {len(goals)} goals")
         return py_trees.common.Status.SUCCESS
 
 
-class SelectNextGoal(py_trees.behaviour.Behaviour):
+class SelectGoal(py_trees.behaviour.Behaviour):
     """Select next incomplete goal"""
     
     def __init__(self):
-        super(SelectNextGoal, self).__init__("SelectGoal")
-        self.blackboard = py_trees.blackboard.Blackboard()
+        super(SelectGoal, self).__init__("SelectGoal")
+        self.bb = py_trees.blackboard.Blackboard()
     
     def update(self):
-        goals = self.blackboard.get(BB.GOALS)
-        completed = self.blackboard.get(BB.COMPLETED_GOALS)
+        goals = self.bb.get(BB.GOALS)
+        done = self.bb.get(BB.COMPLETED)
         
-        for idx, goal_pose in enumerate(goals):
-            if idx not in completed:
-                self.blackboard.set(BB.GOAL_INDEX, idx)
-                self.blackboard.set(BB.TARGET_POSE, goal_pose)
-                rospy.loginfo(f"[{self.name}] Goal {idx+1}/{len(goals)} selected")
+        for i, pose in enumerate(goals):
+            if i not in done:
+                self.bb.set(BB.GOAL_IDX, i)
+                self.bb.set(BB.TARGET_POSE, pose)
+                rospy.loginfo(f"[{self.name}] Goal {i+1}/{len(goals)}")
                 return py_trees.common.Status.SUCCESS
         
-        rospy.loginfo(f"[{self.name}] All {len(goals)} goals completed!")
+        rospy.loginfo(f"[{self.name}] All goals complete!")
         return py_trees.common.Status.FAILURE
 
 
-class SelectBestCube(py_trees.behaviour.Behaviour):
-    """Select optimal cube for current goal"""
+class SelectCube(py_trees.behaviour.Behaviour):
+    """Select best available cube"""
     
     def __init__(self):
-        super(SelectBestCube, self).__init__("SelectCube")
-        self.blackboard = py_trees.blackboard.Blackboard()
+        super(SelectCube, self).__init__("SelectCube")
+        self.bb = py_trees.blackboard.Blackboard()
     
     def update(self):
-        cubes = self.blackboard.get(BB.CUBES)
-        completed = self.blackboard.get(BB.COMPLETED_GOALS)
+        cubes = self.bb.get(BB.CUBES)
+        done = self.bb.get(BB.COMPLETED)
         
-        # Filter available cubes (not already placed)
-        available = [c for c in cubes if c['id'] not in completed]
+        available = [c for c in cubes if c['id'] not in done]
         
         if not available:
-            rospy.logwarn(f"[{self.name}] No available cubes")
+            rospy.logwarn(f"[{self.name}] No cubes available")
             return py_trees.common.Status.FAILURE
         
-        # Select closest cube to robot (largest X)
         best = max(available, key=lambda c: c['pose'].position.x)
-        self.blackboard.set(BB.SELECTED_CUBE, best)
+        self.bb.set(BB.SELECTED_CUBE, best)
         
         rospy.loginfo(f"[{self.name}] Selected cube {best['id']}")
         return py_trees.common.Status.SUCCESS
 
 
-class SetCollisionObject(py_trees.behaviour.Behaviour):
-    """Determine allowed collision object for stacking"""
+class SetCollision(py_trees.behaviour.Behaviour):
+    """Set allowed collision for stacking"""
     
     def __init__(self):
-        super(SetCollisionObject, self).__init__("SetCollision")
-        self.blackboard = py_trees.blackboard.Blackboard()
+        super(SetCollision, self).__init__("SetCollision")
+        self.bb = py_trees.blackboard.Blackboard()
     
     def update(self):
-        goal_idx = self.blackboard.get(BB.GOAL_INDEX)
-        completed = self.blackboard.get(BB.COMPLETED_GOALS)
+        idx = self.bb.get(BB.GOAL_IDX)
+        done = self.bb.get(BB.COMPLETED)
         
-        collision_obj = ""
+        collision = ""
+        if idx > 0 and (idx - 1) in done:
+            collision = f"placed_cube_{idx - 1}"
+            rospy.loginfo(f"[{self.name}] Allow: {collision}")
         
-        # If stacking on previous goal, allow collision with it
-        if goal_idx > 0 and (goal_idx - 1) in completed:
-            prev_cube_id = goal_idx - 1
-            collision_obj = f"placed_cube_{prev_cube_id}"
-            rospy.loginfo(f"[{self.name}] Allowing collision with {collision_obj}")
-        
-        self.blackboard.set(BB.ALLOWED_COLLISION, collision_obj)
+        self.bb.set(BB.COLLISION, collision)
         return py_trees.common.Status.SUCCESS
 
 
-class MarkGoalComplete(py_trees.behaviour.Behaviour):
-    """Mark current goal as completed"""
+class MarkComplete(py_trees.behaviour.Behaviour):
+    """Mark goal complete"""
     
     def __init__(self):
-        super(MarkGoalComplete, self).__init__("MarkComplete")
-        self.blackboard = py_trees.blackboard.Blackboard()
+        super(MarkComplete, self).__init__("MarkComplete")
+        self.bb = py_trees.blackboard.Blackboard()
     
     def update(self):
-        goal_idx = self.blackboard.get(BB.GOAL_INDEX)
-        completed = self.blackboard.get(BB.COMPLETED_GOALS)
-        completed.add(goal_idx)
-        self.blackboard.set(BB.COMPLETED_GOALS, completed)
-        
-        rospy.loginfo(f"[{self.name}] Goal {goal_idx} marked complete")
+        idx = self.bb.get(BB.GOAL_IDX)
+        done = self.bb.get(BB.COMPLETED)
+        done.add(idx)
+        self.bb.set(BB.COMPLETED, done)
+        rospy.loginfo(f"[{self.name}] Goal {idx} done")
         return py_trees.common.Status.SUCCESS
 
 
 ###############################################################################
-# MOTION PLANNING
+# ACTION BEHAVIORS
 ###############################################################################
 
-class PlanToHome(ActionBehaviour):
-    """Plan motion to home position"""
+class ActionClient(py_trees.behaviour.Behaviour):
+    """Base action client"""
     
+    def __init__(self, name, action_name, action_type):
+        super(ActionClient, self).__init__(name)
+        self.action_name = action_name
+        self.action_type = action_type
+        self.client = None
+        self.sent = False
+        self.bb = py_trees.blackboard.Blackboard()
+    
+    def setup(self, timeout):
+        self.client = actionlib.SimpleActionClient(self.action_name, self.action_type)
+        if self.client.wait_for_server(rospy.Duration(timeout)):
+            rospy.loginfo(f"[{self.name}] Ready")
+            return True
+        return False
+    
+    def initialise(self):
+        self.sent = False
+    
+    def update(self):
+        if not self.sent:
+            goal = self.make_goal()
+            if goal is None:
+                return py_trees.common.Status.FAILURE
+            self.client.send_goal(goal)
+            self.sent = True
+            return py_trees.common.Status.RUNNING
+        
+        state = self.client.get_state()
+        if state == GoalStatus.SUCCEEDED:
+            return self.on_success(self.client.get_result())
+        elif state in [GoalStatus.ABORTED, GoalStatus.REJECTED]:
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+    
+    def make_goal(self):
+        raise NotImplementedError
+    
+    def on_success(self, result):
+        return py_trees.common.Status.SUCCESS
+
+
+class PlanHome(ActionClient):
     def __init__(self):
-        super(PlanToHome, self).__init__("PlanHome", "/planning_action", PlanningActionAction)
+        super(PlanHome, self).__init__("PlanHome", "/planning_action", PlanningActionAction)
     
-    def construct_goal(self):
-        goal = PlanningActionGoal()
-        goal.action = "HOME"
-        return goal
+    def make_goal(self):
+        g = PlanningActionGoal()
+        g.action = "HOME"
+        return g
     
-    def handle_success(self, result):
+    def on_success(self, result):
         if result and result.success:
-            self.blackboard.set(BB.PLANNED_TRAJECTORY, result.trajectory)
+            self.bb.set(BB.TRAJECTORY, result.trajectory)
             return py_trees.common.Status.SUCCESS
         return py_trees.common.Status.FAILURE
 
 
-class PlanToPose(ActionBehaviour):
-    """Plan motion to specified pose"""
-    
-    def __init__(self, name, pose_source, offset=(0,0,0), use_collision=False):
+class PlanToPose(ActionClient):
+    def __init__(self, name, source, offset, collision=False):
         super(PlanToPose, self).__init__(name, "/planning_action", PlanningActionAction)
-        self.pose_source = pose_source
+        self.source = source
         self.offset = offset
-        self.use_collision = use_collision
+        self.collision = collision
     
-    def construct_goal(self):
-        source = self.blackboard.get(self.pose_source)
+    def make_goal(self):
+        src = self.bb.get(self.source)
+        g = PlanningActionGoal()
+        g.action = ""
         
-        if self.pose_source == BB.SELECTED_CUBE:
-            base_pose = source['pose']
-            goal_msg = PlanningActionGoal()
-            goal_msg.allowed_collision_object = f"cube_{source['id']}"
+        if self.source == BB.SELECTED_CUBE:
+            base = src['pose']
+            g.allowed_collision_object = f"cube_{src['id']}"
         else:
-            base_pose = source
-            goal_msg = PlanningActionGoal()
-            if self.use_collision:
-                goal_msg.allowed_collision_object = self.blackboard.get(BB.ALLOWED_COLLISION)
+            base = src
+            if self.collision:
+                g.allowed_collision_object = self.bb.get(BB.COLLISION)
         
-        target = offset_pose(base_pose, *self.offset, 
-                           orientation=RobotConfig.GRASP_ORIENTATION)
-        goal_msg.target_pose = target
-        goal_msg.action = ""
-        
-        return goal_msg
+        target = offset_pose(base, *self.offset, quat=Config.GRASP_QUAT)
+        g.target_pose = target
+        return g
     
-    def handle_success(self, result):
+    def on_success(self, result):
         if result and result.success:
-            self.blackboard.set(BB.PLANNED_TRAJECTORY, result.trajectory)
+            self.bb.set(BB.TRAJECTORY, result.trajectory)
             return py_trees.common.Status.SUCCESS
         return py_trees.common.Status.FAILURE
 
 
-class AttachObject(ActionBehaviour):
-    """Attach cube to gripper"""
-    
+class Attach(ActionClient):
     def __init__(self):
-        super(AttachObject, self).__init__("Attach", "/planning_action", PlanningActionAction)
+        super(Attach, self).__init__("Attach", "/planning_action", PlanningActionAction)
     
-    def construct_goal(self):
-        cube = self.blackboard.get(BB.SELECTED_CUBE)
-        goal = PlanningActionGoal()
-        goal.action = "ATTACH"
-        goal.object_name = f"cube_{cube['id']}"
-        return goal
+    def make_goal(self):
+        cube = self.bb.get(BB.SELECTED_CUBE)
+        g = PlanningActionGoal()
+        g.action = "ATTACH"
+        g.object_name = f"cube_{cube['id']}"
+        return g
     
-    def handle_success(self, result):
+    def on_success(self, result):
         return py_trees.common.Status.SUCCESS if result.success else py_trees.common.Status.FAILURE
 
 
-class DetachObject(ActionBehaviour):
-    """Detach cube from gripper"""
-    
+class Detach(ActionClient):
     def __init__(self):
-        super(DetachObject, self).__init__("Detach", "/planning_action", PlanningActionAction)
+        super(Detach, self).__init__("Detach", "/planning_action", PlanningActionAction)
     
-    def construct_goal(self):
-        cube = self.blackboard.get(BB.SELECTED_CUBE)
-        goal = PlanningActionGoal()
-        goal.action = "DETACH"
-        goal.object_name = f"cube_{cube['id']}"
-        return goal
+    def make_goal(self):
+        cube = self.bb.get(BB.SELECTED_CUBE)
+        g = PlanningActionGoal()
+        g.action = "DETACH"
+        g.object_name = f"cube_{cube['id']}"
+        return g
 
 
-###############################################################################
-# MOTION EXECUTION
-###############################################################################
-
-class ExecuteTrajectory(ActionBehaviour):
-    """Execute planned trajectory"""
-    
+class Execute(ActionClient):
     def __init__(self):
-        super(ExecuteTrajectory, self).__init__("Execute", "/control_action", ControlActionAction)
+        super(Execute, self).__init__("Execute", "/control_action", ControlActionAction)
     
-    def construct_goal(self):
-        trajectory = self.blackboard.get(BB.PLANNED_TRAJECTORY)
-        if trajectory is None:
-            rospy.logerr(f"[{self.name}] No trajectory available")
+    def make_goal(self):
+        traj = self.bb.get(BB.TRAJECTORY)
+        if traj is None:
             return None
-        
-        goal = ControlActionGoal()
-        goal.trajectory = trajectory
-        return goal
+        g = ControlActionGoal()
+        g.trajectory = traj
+        return g
 
 
-###############################################################################
-# GRIPPER CONTROL
-###############################################################################
-
-class OpenGripper(ActionBehaviour):
-    """Open gripper"""
-    
+class GripperOpen(ActionClient):
     def __init__(self):
-        super(OpenGripper, self).__init__("Open", "/gripper_action", GripperActionAction)
+        super(GripperOpen, self).__init__("Open", "/gripper_action", GripperActionAction)
     
-    def construct_goal(self):
-        goal = GripperActionGoal()
-        goal.open = True
-        goal.width = RobotConfig.GRIPPER_OPEN_WIDTH
-        return goal
+    def make_goal(self):
+        g = GripperActionGoal()
+        g.open = True
+        g.width = Config.GRIPPER_OPEN_WIDTH
+        return g
     
-    def handle_success(self, result):
+    def on_success(self, result):
         return py_trees.common.Status.SUCCESS
 
 
-class CloseGripper(ActionBehaviour):
-    """Close gripper to grasp"""
-    
+class GripperClose(ActionClient):
     def __init__(self):
-        super(CloseGripper, self).__init__("Close", "/gripper_action", GripperActionAction)
+        super(GripperClose, self).__init__("Close", "/gripper_action", GripperActionAction)
     
-    def construct_goal(self):
-        cube = self.blackboard.get(BB.SELECTED_CUBE)
+    def make_goal(self):
+        cube = self.bb.get(BB.SELECTED_CUBE)
         dims = cube['dimensions']
-        
         dx = dims.x if hasattr(dims, 'x') else dims[0]
         dy = dims.y if hasattr(dims, 'y') else dims[1]
         
-        goal = GripperActionGoal()
-        goal.open = False
-        goal.width = max(RobotConfig.MIN_GRIPPER_WIDTH, 
-                        min(dx, dy) - RobotConfig.GRIPPER_WIDTH_MARGIN)
-        goal.force = RobotConfig.GRIPPER_FORCE
-        return goal
+        g = GripperActionGoal()
+        g.open = False
+        g.width = max(Config.MIN_GRIPPER_WIDTH, min(dx, dy) - Config.GRIPPER_WIDTH_MARGIN)
+        g.force = Config.GRIPPER_FORCE
+        return g
     
-    def handle_success(self, result):
+    def on_success(self, result):
         if result and result.success:
-            rospy.loginfo(f"[{self.name}] Grasp successful")
             return py_trees.common.Status.SUCCESS
-        else:
-            rospy.logwarn(f"[{self.name}] Grasp failed - object slipped")
-            return py_trees.common.Status.FAILURE
+        rospy.logwarn(f"[{self.name}] Grasp failed")
+        return py_trees.common.Status.FAILURE
 
 
 ###############################################################################
-# BEHAVIOR TREE CONSTRUCTION
+# TREE CONSTRUCTION
 ###############################################################################
 
-def create_pick_sequence():
-    """Create pick behavior subtree"""
-    pick = py_trees.composites.Sequence("PickCube")
-    
-    # Approach
-    pick.add_child(OpenGripper())
-    pick.add_child(PlanToPose("PlanApproach", BB.SELECTED_CUBE, 
-                              offset=(0, 0, RobotConfig.SAFE_HEIGHT)))
-    pick.add_child(ExecuteTrajectory())
-    
-    # Descend
-    pick.add_child(PlanToPose("PlanDescend", BB.SELECTED_CUBE,
-                             offset=(0, 0, RobotConfig.GRASP_HEIGHT)))
-    pick.add_child(ExecuteTrajectory())
-    
-    # Grasp
-    pick.add_child(CloseGripper())
-    pick.add_child(AttachObject())
-    
-    # Lift
-    pick.add_child(PlanToPose("PlanLift", BB.SELECTED_CUBE,
-                             offset=(0, 0, RobotConfig.SAFE_HEIGHT)))
-    pick.add_child(ExecuteTrajectory())
-    
+def build_pick_sequence():
+    """Build pick subtree"""
+    pick = py_trees.composites.Sequence("Pick")
+    pick.add_child(GripperOpen())
+    pick.add_child(PlanToPose("Approach", BB.SELECTED_CUBE, (0, 0, Config.SAFE_HEIGHT)))
+    pick.add_child(Execute())
+    pick.add_child(PlanToPose("Descend", BB.SELECTED_CUBE, (0, 0, Config.GRASP_HEIGHT)))
+    pick.add_child(Execute())
+    pick.add_child(GripperClose())
+    pick.add_child(Attach())
+    pick.add_child(PlanToPose("Lift", BB.SELECTED_CUBE, (0, 0, Config.SAFE_HEIGHT)))
+    pick.add_child(Execute())
     return pick
 
 
-def create_place_sequence():
-    """Create place behavior subtree"""
-    place = py_trees.composites.Sequence("PlaceCube")
-    
-    # Approach goal
-    place.add_child(SetCollisionObject())
-    place.add_child(PlanToPose("PlanApproachGoal", BB.TARGET_POSE,
-                              offset=(0, 0, RobotConfig.SAFE_HEIGHT),
-                              use_collision=True))
-    place.add_child(ExecuteTrajectory())
-    
-    # Descend to place
-    place.add_child(PlanToPose("PlanDescendGoal", BB.TARGET_POSE,
-                              offset=(0, 0, RobotConfig.PLACE_HEIGHT),
-                              use_collision=True))
-    place.add_child(ExecuteTrajectory())
-    
-    # Release
-    place.add_child(OpenGripper())
-    place.add_child(DetachObject())
-    place.add_child(MarkGoalComplete())
-    
-    # Clear
-    place.add_child(PlanToPose("PlanClear", BB.TARGET_POSE,
-                              offset=(0, 0, RobotConfig.SAFE_HEIGHT)))
-    place.add_child(ExecuteTrajectory())
-    
+def build_place_sequence():
+    """Build place subtree"""
+    place = py_trees.composites.Sequence("Place")
+    place.add_child(SetCollision())
+    place.add_child(PlanToPose("ApproachGoal", BB.TARGET_POSE, (0, 0, Config.SAFE_HEIGHT), True))
+    place.add_child(Execute())
+    place.add_child(PlanToPose("DescendGoal", BB.TARGET_POSE, (0, 0, Config.PLACE_HEIGHT), True))
+    place.add_child(Execute())
+    place.add_child(GripperOpen())
+    place.add_child(Detach())
+    place.add_child(MarkComplete())
+    place.add_child(PlanToPose("Clear", BB.TARGET_POSE, (0, 0, Config.SAFE_HEIGHT)))
+    place.add_child(Execute())
     return place
 
 
-def create_behavior_tree(pattern_type, pattern_value):
-    """
-    Create behavior tree for pick-and-place manipulation
-    Compatible with py_trees 0.7.6
-    """
+def build_tree(pattern, value):
+    """Build behavior tree with retry decorators"""
     
     root = py_trees.composites.Sequence("Root")
+    root.add_child(InitGoals(pattern, value))
     
-    # Initialize
-    root.add_child(InitializeTask(pattern_type, pattern_value))
+    loop = py_trees.composites.Sequence("Loop")
     
-    # Main loop
-    main_loop = py_trees.composites.Sequence("MainLoop")
+    # Setup
+    setup = py_trees.composites.Sequence("Setup")
+    setup.add_child(PlanHome())
+    setup.add_child(Execute())
+    setup.add_child(Perceive())
+    setup.add_child(SelectGoal())
+    setup.add_child(SelectCube())
+    loop.add_child(setup)
     
-    # Setup phase
-    setup_phase = py_trees.composites.Sequence("Setup")
-    setup_phase.add_child(PlanToHome())
-    setup_phase.add_child(ExecuteTrajectory())
-    setup_phase.add_child(PerceiveCubes())
-    setup_phase.add_child(SelectNextGoal())
-    setup_phase.add_child(SelectBestCube())
-    main_loop.add_child(setup_phase)
-    
-    retry = RetryDecorator()
     # Pick with retry
-    pick_with_retry = RetryDecorator(
+    pick_with_retry = Retry(
         name="RetryPick",
-        child=create_pick_sequence(),
-        num_failures=RobotConfig.MAX_GRASP_RETRIES
+        child=build_pick_sequence(),
+        num_failures=Config.MAX_PICK_RETRIES
     )
-    main_loop.add_child(pick_with_retry)
+    loop.add_child(pick_with_retry)
     
     # Place with retry
-    place_with_retry = RetryDecorator(
+    place_with_retry = Retry(
         name="RetryPlace",
-        child=create_place_sequence(),
-        num_failures=RobotConfig.MAX_PLAN_RETRIES
+        child=build_place_sequence(),
+        num_failures=Config.MAX_PLACE_RETRIES
     )
-    main_loop.add_child(place_with_retry)
+    loop.add_child(place_with_retry)
     
-    root.add_child(main_loop)
-    
+    root.add_child(loop)
     return root
 
 
@@ -726,45 +636,39 @@ def create_behavior_tree(pattern_type, pattern_value):
 ###############################################################################
 
 def main():
-    rospy.init_node('orchestrator_bt_advanced')
+    rospy.init_node('orchestrator_bt')
     
-    # Parse parameters
     pattern_str = rospy.get_param('~pattern_type', 'STACK').upper()
-    pattern_value = rospy.get_param('~pattern_value', '3')
+    value = rospy.get_param('~pattern_value', '3')
     
     try:
-        pattern_type = TaskPattern[pattern_str]
-    except KeyError:
-        rospy.logerr(f"Invalid pattern type: {pattern_str}")
-        rospy.logerr(f"Valid options: {[p.value for p in TaskPattern]}")
+        pattern = Pattern[pattern_str]
+    except:
+        rospy.logerr(f"Invalid pattern: {pattern_str}")
         return
     
     rospy.loginfo("=" * 60)
-    rospy.loginfo("ADVANCED ORCHESTRATOR - Reactive Behavior Tree")
-    rospy.loginfo(f"Task: {pattern_type.value} ({pattern_value})")
-    rospy.loginfo(f"py_trees version: 0.7.6 compatible")
+    rospy.loginfo("ORCHESTRATOR - BT with Retry Decorator")
+    rospy.loginfo(f"Task: {pattern.value} ({value})")
+    rospy.loginfo(f"Pick retries: {Config.MAX_PICK_RETRIES}")
+    rospy.loginfo(f"Place retries: {Config.MAX_PLACE_RETRIES}")
     rospy.loginfo("=" * 60)
     
-    # Initialize blackboard
     init_blackboard()
     
-    # Build tree
-    root = create_behavior_tree(pattern_type, pattern_value)
+    root = build_tree(pattern, value)
     tree = py_trees_ros.trees.BehaviourTree(root)
     
-    # Setup
-    rospy.loginfo("Setting up behavior tree...")
     if not tree.setup(timeout=30):
-        rospy.logerr("Tree setup failed!")
+        rospy.logerr("Setup failed!")
         return
     
-    rospy.loginfo("Tree initialized. Starting execution...")
+    rospy.loginfo("Starting...")
     
-    # Run
     try:
         tree.tick_tock(sleep_ms=100)
     except KeyboardInterrupt:
-        rospy.loginfo("Shutting down...")
+        pass
     finally:
         tree.shutdown()
 

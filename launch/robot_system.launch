@@ -1,7 +1,7 @@
 <launch>
   <!-- Start perception service -->
   <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node.py" output="screen">
-    <rosparam command="load" file="$(find franka_zed_gazebo)/config/perception_params.yaml"/>
+    <!-- <rosparam command="load" file="$(find franka_zed_gazebo)/config/perception_params.yaml"/> -->
   </node>
 
   <!-- Start MoveIt move_group
@@ -24,4 +24,3 @@
   <!-- Behavior Tree Visualization -->
   <node name="rqt_py_trees" pkg="rqt_py_trees" type="rqt_py_trees" output="screen"/>
 </launch>
-
