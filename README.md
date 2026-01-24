@@ -15,7 +15,7 @@ For installing the docker, you can pull the images.
 
 * If your PC has an NVIDIA GPU, you can run:
 ```
-docker pull bandi0605/rheinrobot:init_with_static_zed
+docker pull bandi0605/rheinrobot:ban_experiments_0.1
 ```
 
 Remember to allow any external program X11 to access the GUI: 
@@ -37,18 +37,26 @@ docker run -it \
     --net=host \
     --privileged \
     --runtime=nvidia \
-    bandi0605/rheinrobot:only_zed_init \
+    bandi0605/rheinrobot:ban_experiments_0.1 \
     bash
 ```
 
 Now you are within the docker workspace. If you want to access the workspace in a new terminal, just run:
 ```
-docker exec -it container_name bash
+docker exec -it rheinrobot_franka_project bash
 ```
 
 Get up-to-date repo by
 ```
 cd src/franka_zed_gazebo/ && git pull && cd ../..
+```
+
+
+This project uses **uv** to manage a virtual environment located at `.venv`.
+
+Activate the virtual environment:
+```
+source /opt/ros_ws/.venv/bin/activate
 ```
 
 ## Simulation
@@ -113,3 +121,4 @@ rosbag play -l sample_2.bag
 ### Notes
 
 The necessary data for the integration of the ZED2 camera in the Gazebo simulation was taken from the package created by [LeoRover for the European Rover Challenge ](https://github.com/LeoRover/leo_erc_common/blob/ec055bd2bb6cd69148a617dcf84b890470b27d0c/leo_erc_description/urdf/zed2.xacro)
+
