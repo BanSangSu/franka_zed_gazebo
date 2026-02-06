@@ -38,7 +38,7 @@ class GraspServiceNode:
         self.ckpt_dir = rospy.get_param('~ckpt_dir', 'checkpoints/contact_graspnet')
         
         current_dir= os.path.dirname(os.path.abspath(__file__))
-        package_path = os.path.dirname(current_dir, 'contact_graspnet_pytorch')
+        package_path = os.path.join(current_dir, 'contact_graspnet_pytorch')
         rospy.loginfo(f"Package exists at: {package_path}")
         
         ckpt_base = os.path.join(package_path, self.ckpt_dir)
