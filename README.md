@@ -81,6 +81,12 @@ roslaunch franka_zed_gazebo moveit_gazebo_panda.launch
 >  <img src="images/gripper.png" width="350"/> <img src="images/no_gripper.png" width="350"/> 
 > </p>
 
+You can run our robot system after running the `moveit_gazebo_panda.launch`.
+
+```
+roslaunch franka_zed_gazebo robot_system.launch
+```
+
 
 ## Real robot
 

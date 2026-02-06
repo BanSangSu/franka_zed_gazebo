@@ -1,333 +1,324 @@
 #!/usr/bin/env python3
+
 import rospy
+import message_filters
+import sys
+import os
 import numpy as np
-import copy
-import open3d as o3d
+import cv2
 import tf2_ros
+import tf2_geometry_msgs
 import moveit_commander
-import sensor_msgs.point_cloud2 as pc2
-
-
-from sensor_msgs.msg import PointCloud2, PointField
-from geometry_msgs.msg import PoseArray, Pose, PoseStamped, Vector3
+from cv_bridge import CvBridge, CvBridgeError
+from geometry_msgs.msg import PointStamped, Pose, PoseArray, PoseStamped, Vector3
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Image as RosImage, CameraInfo, PointCloud2, PointField
 from std_msgs.msg import Header
-from visualization_msgs.msg import Marker, MarkerArray
-from franka_zed_gazebo.srv import PerceptionService, PerceptionServiceResponse
+import sensor_msgs.point_cloud2 as pc2
+from sklearn.decomposition import PCA
+from scipy.spatial.transform import Rotation as R
 
+# --- Runtime Path Adjustment ---
+current_dir = os.path.dirname(os.path.realpath(__file__))
+parent_dir = os.path.dirname(current_dir) 
 
-class Open3DPerceptionNode:
-   def __init__(self):
-       rospy.init_node('open3d_perception_node')
+# # Path for detect_n_segment
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
+# Add path contact_graspnet
+# path: parent/contact_graspnet_pytorch/contact_graspnet_pytorch/
+grasp_node_path = os.path.join(parent_dir, 'contact_graspnet_pytorch')
+if grasp_node_path not in sys.path:
+    sys.path.append(grasp_node_path)
 
-       # 1. Initialize MoveIt Planning Scene
-       moveit_commander.roscpp_initialize([])
-       self.scene = moveit_commander.PlanningSceneInterface()
-       rospy.sleep(1.0)
-      
-       # 2. Parameters & Configuration
-       self.world_frame = rospy.get_param('~world_frame', 'world')
-       self.known_cube_size = rospy.get_param('~known_cube_size', 0.045)
-       self.target_z_ground_truth = 0.022  # Reference Z from Gazebo
-       self.debug_mode = rospy.get_param('~debug_mode', True)
-      
-       # 3. Table ROI Bounds (World Frame)
-       self.table_x_min = rospy.get_param('~table_x_min', 0.3)
-       self.table_x_max = rospy.get_param('~table_x_max', 0.8)
-       self.table_y_min = rospy.get_param('~table_y_min', -0.4)
-       self.table_y_max = rospy.get_param('~table_y_max', 0.4)
-      
-       # 4. Setup ICP Template (Synthetic Cube)
-       self.target_cube_mesh = o3d.geometry.TriangleMesh.create_box(
-           width=self.known_cube_size, height=self.known_cube_size, depth=self.known_cube_size)
-       self.target_cube_mesh.translate(-np.array([self.known_cube_size] * 3) / 2)
-       self.target_cube_pcd = self.target_cube_mesh.sample_points_uniformly(number_of_points=1000)
-      
-       # 4. Publishers & Subscribers
-       pc_topic = "/static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered"
-       self.pc_sub = rospy.Subscriber(pc_topic, PointCloud2, self.pointcloud_callback)
-      
-       # Debug Publishers
-       self.point_cloud_pub = rospy.Publisher('/cube_detection/cubes_pointcloud', PointCloud2, queue_size=10)
-       self.table_removed_pub = rospy.Publisher('/debug/table_removed', PointCloud2, queue_size=10)
-       self.plane_marker_pub = rospy.Publisher('/debug/table_plane', Marker, queue_size=10)
-       self.marker_pub = rospy.Publisher('/cube_detection/markers', MarkerArray, queue_size=10)
-      
-       # TF Listener
-       self.tf_buffer = tf2_ros.Buffer()
-       self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
-      
-       # Service
-       self.service = rospy.Service('/perception_service', PerceptionService, self.handle_perception_request)
-      
-       self.latest_pc = None
-       rospy.loginfo("Advanced Open3D Perception Node Started")
+from detect_n_segment import MultiDetectorSAM 
+# Import the GraspNode class directly if running in same process, 
+# or use ServiceProxy if running separately.
+# For this file, I will assume we import the logic or have a helper function.
+try:
+    from contact_graspnet_pytorch.grasp_generation_service_node import GraspServiceNode
+    # from contact_graspnet_pytorch import GraspServiceNode
+    HAS_GRASP_NET = True
+    print("GraspServiceNode imported successfully. Grasping enabled.")
+except ImportError as e:
+    print(f"Import failed: {e}")
+    HAS_GRASP_NET = False
+    print("Warning: GraspServiceNode not found. Grasping will be disabled.")
 
+class Cube:
+    def __init__(self, id, position, orientation, confidence, dimensions, grasp_pose=None, grasp_score=0.0):
+        self.id = id
+        self.position = position        # [x, y, z] in World
+        self.orientation = orientation  # [x, y, z, w] in World
+        self.confidence = confidence
+        self.dimensions = dimensions
+        self.grasp_pose = grasp_pose    # 4x4 Matrix in World Frame
+        self.grasp_score = grasp_score
 
-   def pointcloud_callback(self, pc_msg):
-       self.latest_pc = pc_msg
+class SamCubeDetector:
+    def __init__(self):
+        rospy.init_node('sam_cube_detector', anonymous=True)
+        
+        # 1. Initialize MoveIt
+        moveit_commander.roscpp_initialize(sys.argv)
+        self.scene = moveit_commander.PlanningSceneInterface()
+        
+        # 2. Parameters
+        self.detector_type = rospy.get_param('~detector_type', 'florence2')
+        self.sam_checkpoint = rospy.get_param('~sam_checkpoint', 'sam_vit_b_01ec64.pth')
+        self.sam_model_type = rospy.get_param('~sam_model_type', 'vit_b')
+        self.prompt = rospy.get_param('~prompt', 'small cube')
+        self.world_frame = rospy.get_param('~world_frame', 'world')
+        self.known_cube_size = 0.045 
+        
+        self.table_x_min, self.table_x_max = 0.3, 1.0
+        self.table_y_min, self.table_y_max = -0.4, 0.4
 
+        self.bridge = CvBridge()
+        self.camera_K = None
+        self.camera_frame_id = None
+        
+        # 3. Initialize Detectors
+        detector_config = {"model_name": "microsoft/Florence-2-base"}
+        self.pipeline = MultiDetectorSAM(
+            detector_type=self.detector_type,
+            detector_config=detector_config,
+            sam_checkpoint=self.sam_checkpoint,
+            sam_model_type=self.sam_model_type
+        )
+        
+        # Initialize Grasp Net (If running in same process for simplicity)
+        # In a real heavy setup, use rospy.ServiceProxy('detect_grasps', ...)
+        if HAS_GRASP_NET:
+            self.grasp_detector = GraspServiceNode(init_node=False)
+            # We override the node init inside GraspServiceNode to avoid double init
+            # or simply use the helper methods.
+        
+        # 4. ROS Topics
+        image_topic = rospy.get_param('~image_topic', "static_zed2_camera/static_zed2/zed_node/left/image_rect_color")
+        camera_info_topic = rospy.get_param('~camera_info_topic', "static_zed2_camera/static_zed2/zed_node/left/camera_info")
+        depth_topic = rospy.get_param('~depth_topic', "static_zed2_camera/static_zed2/zed_node/depth/depth_registered")
+        point_cloud_topic = rospy.get_param('~point_cloud_topic', "static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered")
+        
+        image_sub = message_filters.Subscriber(image_topic, RosImage)
+        camera_info_sub = message_filters.Subscriber(camera_info_topic, CameraInfo)
+        depth_sub = message_filters.Subscriber(depth_topic, RosImage)
+        point_cloud_sub = message_filters.Subscriber(point_cloud_topic, PointCloud2)
 
-   def align_pose_to_normal(self, pose_matrix, plane_normal):
-       """Aligns the cube's Z-axis to the table normal to fix tilting."""
-       R_current = pose_matrix[:3, :3]
-       t_current = pose_matrix[:3, 3]
-      
-       # Force Z-axis to match table normal
-       z_new = plane_normal / np.linalg.norm(plane_normal)
-       if np.dot(z_new, R_current[:, 2]) < 0: z_new = -z_new
-      
-       # Maintain Yaw by projecting current X onto the plane
-       x_curr = R_current[:, 0]
-       x_projected = x_curr - np.dot(x_curr, z_new) * z_new
-       if np.linalg.norm(x_projected) < 1e-6:
-           x_new = np.cross(z_new, np.array([1, 0, 0]))
-       else:
-           x_new = x_projected / np.linalg.norm(x_projected)
-      
-       y_new = np.cross(z_new, x_new)
-      
-       new_pose = np.eye(4)
-       new_pose[:3, :3] = np.column_stack((x_new, y_new, z_new))
-       new_pose[:3, 3] = t_current
-       return new_pose
+        ts = message_filters.ApproximateTimeSynchronizer([image_sub, camera_info_sub, depth_sub, point_cloud_sub], 10, 0.1)
+        ts.registerCallback(self.detection_callback)
+        
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        
+        # Publishers
+        self.centroid_point_pub = rospy.Publisher('/sam_cube_detection/cubes_centroid_point', PointCloud2, queue_size=10)
+        self.mapped_point_cloud = rospy.Publisher('/sam_cube_detection/cubes_mapped_point_cloud', PointCloud2, queue_size=10)
+        self.seg_image_pub = rospy.Publisher('/sam_cube_detection/segmentation_image', RosImage, queue_size=10)
+        self.grasp_vis_pub = rospy.Publisher('/sam_cube_detection/grasp_poses', PoseArray, queue_size=10)
+        
+        rospy.loginfo(f"SAM+GraspNode Started. Frame: {self.world_frame}")
 
+    def detection_callback(self, image_msg, camera_info_msg, depth_msg, point_cloud_msg):
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
+            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="32FC1")
+            
+            if self.camera_K is None:
+                self.camera_K = np.array(camera_info_msg.K).reshape(3, 3)
+                self.camera_frame_id = camera_info_msg.header.frame_id
+            
+            # 1. SAM Inference
+            result = self.pipeline.detect_and_segment(cv_image, prompt=self.prompt, conf=0.25)
 
-   def publish_debug_cloud(self, pcd, publisher):
-       """Converts Open3D PCD back to ROS PointCloud2 for visualization."""
-       if not self.debug_mode or pcd is None: return
-       points = np.asarray(pcd.points)
-       header = Header(stamp=rospy.Time.now(), frame_id=self.world_frame)
-       pc_msg = pc2.create_cloud_xyz32(header, points.tolist())
-       publisher.publish(pc_msg)
+            if result is None or 'detection' not in result or len(result['detection']['scores']) == 0:
+                return
+            
+            # 2. Process Cubes and Grasps
+            self.visualize_and_publish(result, cv_image, image_msg.header)
+            
+            # Prepare Segmap for GraspNet (Combine masks)
+            # ContactGraspnet uses a segmap where 0 is background, 1 is obj1, 2 is obj2...
+            segmap = np.zeros(cv_image.shape[:2], dtype=np.uint8)
+            masks = result['segmentation']['masks']
+            
+            # To map GraspNet ID back to our loop index
+            seg_id_to_index = {} 
+            
+            valid_mask_count = 0
+            for i, mask in enumerate(masks):
+                # Simple check to avoid noise
+                if np.sum(mask) > 50: 
+                    seg_id = valid_mask_count + 1
+                    segmap[mask > 0] = seg_id
+                    seg_id_to_index[seg_id] = i
+                    valid_mask_count += 1
 
+            # 3. Call GraspNet (Simulating Service Call)
+            detected_grasps_cam = {} # Dict {seg_id: {pose: 4x4, score: float}}
+            if HAS_GRASP_NET and valid_mask_count > 0:
+                # In real ROS Service: 
+                # req = DetectGraspsRequest(image_msg, depth_msg, bridge.cv2_to_imgmsg(segmap_combined), camera_info_msg)
+                # resp = service_proxy(req)
+                
+                # Direct call for now:
+                grasp_results = self.grasp_detector.process_ros_data(image_msg, depth_msg, segmap, point_cloud_msg, camera_info_msg)
+                
+                # Re-organize results by ID
+                for g in grasp_results:
+                    detected_grasps_cam[g['id']] = {'pose': g['pose'], 'score': g['score']}
 
-   def visualize_plane(self, normal, d):
-       """Publishes a red plane marker in RViz."""
-       if not self.debug_mode: return
-       marker = Marker()
-       marker.header.frame_id = self.world_frame
-       marker.header.stamp = rospy.Time.now()
-       marker.type = Marker.CUBE
-       marker.action = Marker.ADD
-       marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = -normal * d
-       marker.pose.orientation.w = 1.0
-       marker.scale.x, marker.scale.y, marker.scale.z = 1.0, 1.0, 0.005
-       marker.color.r, marker.color.g, marker.color.b, marker.color.a = 1.0, 0.0, 0.0, 0.3
-       self.plane_marker_pub.publish(marker)
+            # 4. Process Geometry + Merge Grasp Info
+            self.process_detections_and_grasps(
+                result, depth_image, point_cloud_msg, image_msg.header, 
+                detected_grasps_cam, seg_id_to_index
+            )
+            
+        except Exception as e:
+            rospy.logerr(f"Callback error: {e}")
+            import traceback
+            traceback.print_exc()
 
+    def process_detections_and_grasps(self, result, depth_image, point_cloud_msg, header, grasp_data, id_map):
+        masks = result['segmentation']['masks']
+        scores = result['detection']['scores']
 
-   def process_point_cloud(self, pc_msg):
-       # 1. Prepare Open3D Point Cloud in CAMERA FRAME (Same as final_poses.py)
-       points = list(pc2.read_points(pc_msg, skip_nans=True, field_names=("x", "y", "z")))
-       if not points: return []
-       pcd = o3d.geometry.PointCloud()
-       pcd.points = o3d.utility.Vector3dVector(np.array(points))
+        print(f"Detection Scores: {scores}")
+        
+        # TF Lookup
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.world_frame, self.camera_frame_id, header.stamp, rospy.Duration(0.1))
+        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException):
+            return
 
+        detected_cubes = []
+        all_points_world = []
+        grasp_pose_array = PoseArray()
+        grasp_pose_array.header.frame_id = self.world_frame
+        grasp_pose_array.header.stamp = header.stamp
+        
+        # Iterate over unique IDs we sent to GraspNet
+        for seg_id, index in id_map.items():
+            mask = masks[index]
+            
+            # --- Geometric Position Logic (Existing) ---
+            rows, cols = np.where(mask > 0)
+            uvs = np.stack([cols, rows], axis=1).tolist()
+            point_gen = pc2.read_points(point_cloud_msg, field_names=("x", "y", "z"), skip_nans=True, uvs=uvs)
+            points_cam = np.array(list(point_gen))
+            
+            if len(points_cam) < 50: continue
 
-       # 2. Pre-processing (Voxel Downsample)
-       pcd_down = pcd.voxel_down_sample(0.002)
-      
-       # Filter floor/distance (Camera Frame Z is depth)
-       points_np = np.asarray(pcd_down.points)
-       mask = points_np[:, 2] < 2.5 # Keep points within 2.5m
-       pcd_down = pcd_down.select_by_index(np.where(mask)[0])
+            points_world = self.transform_points_to_world(points_cam, transform)
+            w_centroid = np.mean(points_world, axis=0)
+            
+            if not (self.table_x_min < w_centroid[0] < self.table_x_max and 
+                    self.table_y_min < w_centroid[1] < self.table_y_max):
+                continue
 
+            # Orientation via PCA
+            pca_points = points_world - w_centroid
+            pca = PCA(n_components=2).fit(pca_points[:, :2])
+            angle = np.arctan2(pca.components_[0, 1], pca.components_[0, 0])
+            
+            cube_pos = [w_centroid[0], w_centroid[1], self.known_cube_size / 2.0]
+            cube_quat = R.from_euler('z', angle).as_quat()
 
-       # 3. Table Removal (RANSAC) in Camera Frame
-       plane_model, inliers = pcd_down.segment_plane(0.01, 3, 1000)
-       table_normal = np.array(plane_model[:3])
-       objects_cloud = pcd_down.select_by_index(inliers, invert=True)
-      
-       # 4. Clustering (DBSCAN) - Thresholds same as final_poses.py
-       labels = np.array(objects_cloud.cluster_dbscan(eps=0.015, min_points=30))
-      
-       # TF Lookup (World to Camera)
-       try:
-           trans = self.tf_buffer.lookup_transform(self.world_frame, pc_msg.header.frame_id, rospy.Time(0), rospy.Duration(1.0))
-           t_vec = [trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z]
-           q_vec = [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]
-           # Convert TF to 4x4 Matrix
-           q_o3d = [q_vec[3], q_vec[0], q_vec[1], q_vec[2]]
-           r_mat = o3d.geometry.get_rotation_matrix_from_quaternion(q_o3d)
-           camera_to_world = np.eye(4)
-           camera_to_world[:3, :3] = r_mat
-           camera_to_world[:3, 3] = t_vec
-       except: return []
+            # --- Grasp Processing ---
+            final_grasp_world = None
+            grasp_score = 0.0
+            
+            if seg_id in grasp_data:
+                # Grasp is in Camera Frame (4x4 Matrix)
+                g_pose_cam = grasp_data[seg_id]['pose']
+                grasp_score = grasp_data[seg_id]['score']
+                
+                # Transform Grasp Matrix: Cam -> World
+                # T_world_grasp = T_world_cam * T_cam_grasp
+                
+                # Get T_world_cam matrix
+                t = transform.transform.translation
+                q = transform.transform.rotation
+                T_world_cam = self.quaternion_matrix([q.x, q.y, q.z, q.w])
+                T_world_cam[0:3, 3] = [t.x, t.y, t.z]
+                
+                T_world_grasp = np.dot(T_world_cam, g_pose_cam)
+                final_grasp_world = T_world_grasp
+                
+                # Add to visualization array
+                p_msg = Pose()
+                p_msg.position.x, p_msg.position.y, p_msg.position.z = T_world_grasp[0:3, 3]
+                q_grasp = R.from_matrix(T_world_grasp[0:3, 0:3]).as_quat()
+                p_msg.orientation.x, p_msg.orientation.y, p_msg.orientation.z, p_msg.orientation.w = q_grasp
+                grasp_pose_array.poses.append(p_msg)
 
+            # Store Cube Info
+            cube = Cube(index, cube_pos, cube_quat, scores[index], [self.known_cube_size]*3, 
+                       grasp_pose=final_grasp_world, grasp_score=grasp_score)
+            
+            detected_cubes.append(cube)
+            self.update_planning_scene(index, cube_pos, cube_quat)
+            all_points_world.append(points_world)
 
-       raw_poses_world = []
-       all_clusters_cloud = o3d.geometry.PointCloud()
+        self.publish_centroid_point(detected_cubes, header.stamp)
+        self.publish_mapped_point_cloud(all_points_world, header.stamp)
+        self.grasp_vis_pub.publish(grasp_pose_array)
 
+    def transform_points_to_world(self, points, transform):
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        matrix = self.quaternion_matrix([q.x, q.y, q.z, q.w])
+        matrix[0:3, 3] = [t.x, t.y, t.z]
+        points_homo = np.hstack([points, np.ones((points.shape[0], 1))])
+        return np.dot(matrix, points_homo.T).T[:, :3]
 
-       # 5. ICP & Normal Alignment in Camera Frame, then Transform to World
-       for i in range(labels.max() + 1):
-           indices = np.where(labels == i)[0]
-           if len(indices) < 50: continue
-          
-           cluster = objects_cloud.select_by_index(indices)
-          
-           # --- ROI & Noise Filter (Crucial to prevent strange cubes at edges) ---
-           # Transform cluster center to world just to check if it's on the table
-           center_cam = cluster.get_center()
-           center_world = np.dot(camera_to_world, np.append(center_cam, 1.0))[:3]
-          
-           # Table bounds ROI using class parameters
-           if not (self.table_x_min < center_world[0] < self.table_x_max and
-                   self.table_y_min < center_world[1] < self.table_y_max):
-               continue
-          
-           # Check cluster proportions (Prevent flat table edges from being cubes)
-           min_bound = cluster.get_min_bound()
-           max_bound = cluster.get_max_bound()
-           dims = max_bound - min_bound
-           if max(dims) > 0.08 or min(dims) < 0.01: # Too big or too flat
-               continue
-           # -----------------------------------------------------------------------
+    def quaternion_matrix(self, quaternion):
+        # Helper to avoid importing tf.transformations which might be deprecated in py3
+        mat = np.eye(4)
+    
+        if len(quaternion) == 4:
+            # 2. Get the 3x3 rotation matrix from Scipy
+            rotation_3x3 = R.from_quat(quaternion).as_matrix()
+            
+            # 3. Insert the 3x3 rotation into the top-left of the 4x4 matrix
+            mat[0:3, 0:3] = rotation_3x3
+            
+        return mat
 
+    # ... (Keep existing visualization and helper methods: update_planning_scene, visualize_and_publish, etc.) ...
+    def update_planning_scene(self, idx, pos, q):
+        ps = PoseStamped()
+        ps.header.frame_id = self.world_frame
+        ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = pos
+        ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w = q
+        self.scene.add_box(f"cube_{idx}", ps, [self.known_cube_size - 0.002]*3)
 
-           all_clusters_cloud += cluster
-           trans_init = np.eye(4); trans_init[:3, 3] = center_cam
-          
-           # ICP (Camera Frame)
-           reg = o3d.pipelines.registration.registration_icp(
-               self.target_cube_pcd, cluster, 0.01, trans_init)
-          
-           # Align Pose to Table Normal (Camera Frame)
-           aligned_pose_cam = self.align_pose_to_normal(reg.transformation, table_normal)
-          
-           # Transform to World Frame
-           world_pose = np.dot(camera_to_world, aligned_pose_cam)
-           raw_poses_world.append(world_pose)
+    def visualize_and_publish(self, result, cv_image, header):
+        vis = cv_image.copy()
+        for mask in result['segmentation']['masks']:
+            vis[mask > 0] = vis[mask > 0] * 0.5 + np.array([0, 255, 0]) * 0.5
+        msg = self.bridge.cv2_to_imgmsg(vis, "bgr8")
+        msg.header = header
+        self.seg_image_pub.publish(msg)
 
+    def publish_centroid_point(self, cubes, stamp):
+        if not cubes: return
+        pts = [[c.position[0], c.position[1], c.position[2], c.confidence] for c in cubes]
+        fields = [PointField('x',0,7,1), PointField('y',4,7,1), PointField('z',8,7,1), PointField('intensity',12,7,1)]
+        msg = pc2.create_cloud(Header(stamp=stamp, frame_id=self.world_frame), fields, pts)
+        self.centroid_point_pub.publish(msg)
 
-       # Publish debug cloud (transformed for visualization)
-       all_clusters_cloud.transform(camera_to_world)
-       self.publish_debug_cloud(all_clusters_cloud, self.point_cloud_pub)
-      
-       # Also published transformed table-removed cloud for consistency
-       objects_cloud_world = copy.deepcopy(objects_cloud)
-       objects_cloud_world.transform(camera_to_world)
-       self.publish_debug_cloud(objects_cloud_world, self.table_removed_pub)
-
-
-       # 6. Automatic Z-Calibration (Matching final_poses.py but targeting CENTER)
-       if not raw_poses_world: return []
-      
-       # Final target center Z should be 0.022 (approx half of 0.045 cube)
-       raw_center_zs = [p[2, 3] for p in raw_poses_world]
-       avg_center_z = np.median(raw_center_zs)
-       z_offset = avg_center_z - 0.022
-      
-       results = []
-       for p in raw_poses_world:
-           pos = p[:3, 3]
-           # Correct only Z (Apply offset to bring median center to 0.022)
-           pos[2] -= z_offset
-          
-           R = p[:3, :3]
-           # Handle cube 90-degree symmetry for Yaw
-           yaw = (np.arctan2(R[1, 0], R[0, 0]) + np.pi/4) % (np.pi/2) - np.pi/4
-          
-           results.append({
-               'position': pos.tolist(),
-               'orientation': [0, 0, np.sin(yaw/2), np.cos(yaw/2)],
-               'dimensions': [self.known_cube_size] * 3
-           })
-       return results
-
-
-   def handle_perception_request(self, req):
-       res = PerceptionServiceResponse()
-       if self.latest_pc is None: return res
-
-
-       cubes_data = self.process_point_cloud(self.latest_pc)
-       self.update_planning_scene(cubes_data)
-       self.publish_markers(cubes_data)
-      
-       res.success = True
-       res.num_cubes = len(cubes_data)
-       res.cube_poses = PoseArray()
-       res.cube_poses.header.frame_id = self.world_frame
-       res.cube_poses.header.stamp = rospy.Time.now()
-      
-       for cube in cubes_data:
-           p = Pose()
-           p.position.x, p.position.y, p.position.z = cube['position']
-           p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = cube['orientation']
-           res.cube_poses.poses.append(p)
-          
-           # Populate dimensions and labels
-           dim = Vector3()
-           dim.x, dim.y, dim.z = cube['dimensions']
-           res.dimensions.append(dim)
-           res.labels.append("cube")
-       return res
-
-
-   def update_planning_scene(self, cubes_data):
-       # Remove old objects
-       for obj in self.scene.get_known_object_names():
-           if obj.startswith("cube_"): self.scene.remove_world_object(obj)
-       rospy.sleep(0.2)
-
-
-       # Add new objects
-       for i, cube in enumerate(cubes_data):
-           ps = PoseStamped()
-           ps.header.frame_id = self.world_frame
-           ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = cube['position']
-           ps.pose.orientation.z, ps.pose.orientation.w = cube['orientation'][2:]
-          
-           size = [s - 0.002 for s in cube['dimensions']] # Shrink for safety
-           self.scene.add_box(f"cube_{i}", ps, size)
-
-
-   def publish_markers(self, cubes_data):
-       """Publishes 3D bounding boxes and labels for each cube."""
-       marker_array = MarkerArray()
-       for i, cube in enumerate(cubes_data):
-           # Cube Box Marker
-           m = Marker()
-           m.header.frame_id = self.world_frame
-           m.header.stamp = rospy.Time.now()
-           m.ns = "cubes"
-           m.id = i
-           m.type = Marker.CUBE
-           m.action = Marker.ADD
-           m.pose.position.x, m.pose.position.y, m.pose.position.z = cube['position']
-           m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = cube['orientation']
-           m.scale.x, m.scale.y, m.scale.z = cube['dimensions']
-           m.color.r, m.color.g, m.color.b, m.color.a = 0.0, 1.0, 0.0, 0.6
-           marker_array.markers.append(m)
-          
-           # Label Marker
-           l = Marker()
-           l.header.frame_id = self.world_frame
-           l.header.stamp = rospy.Time.now()
-           l.ns = "labels"
-           l.id = i + 100
-           l.type = Marker.TEXT_VIEW_FACING
-           l.action = Marker.ADD
-           l.pose.position.x, l.pose.position.y, l.pose.position.z = cube['position']
-           l.pose.position.z += 0.05
-           l.scale.z = 0.02
-           l.color.r, l.color.g, l.color.b, l.color.a = 1.0, 1.0, 1.0, 1.0
-           l.text = f"Cube_{i}"
-           marker_array.markers.append(l)
-          
-       self.marker_pub.publish(marker_array)
-
+    def publish_mapped_point_cloud(self, all_points, stamp):
+        all_points = np.vstack(all_points) if all_points else np.empty((0, 3))
+        if len(all_points) == 0: return
+        fields = [PointField('x', 0, PointField.FLOAT32, 1), PointField('y', 4, PointField.FLOAT32, 1), PointField('z', 8, PointField.FLOAT32, 1)]
+        msg = pc2.create_cloud(Header(stamp=stamp, frame_id=self.world_frame), fields, all_points)
+        self.mapped_point_cloud.publish(msg)
 
 if __name__ == '__main__':
-   try:
-       node = Open3DPerceptionNode()
-       rospy.spin()
-   except rospy.ROSInterruptException:
-       pass
-
-
-
-
-
+    try:
+        detector = SamCubeDetector()
+        rospy.spin()
+    except rospy.ROSInterruptException: pass

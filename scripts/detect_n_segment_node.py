@@ -20,6 +20,14 @@ import tf2_geometry_msgs
 import numpy as np
 import cv2
 
+# import sys
+# import os
+# # --- Runtime Path Adjustment ---
+# current_dir = os.path.dirname(os.path.realpath(__file__))
+# parent_dir = os.path.dirname(current_dir)
+# if parent_dir not in sys.path:
+#     sys.path.append(parent_dir)
+
 from detect_n_segment import MultiDetectorSAM 
 
 # ==================== ROS NODE ====================
@@ -70,6 +78,7 @@ class SamCubeDetector:
         # camera_info_topic = rospy.get_param('~camera_info_topic', "/zed2/zed_node/rgb/camera_info")
         # depth_topic = rospy.get_param('~depth_topic', "/zed2/zed_node/depth/depth_registered")
         # ZED2 topics
+        # image_topic = rospy.get_param('~image_topic', "/static_zed2_camera/static_zed2/zed_node/left/image_rect_color")
         image_topic = rospy.get_param('~image_topic', "/static_zed2/zed_node/left/image_rect_color")
         camera_info_topic = rospy.get_param('~camera_info_topic', "/static_zed2/zed_node/left/camera_info")
         depth_topic = rospy.get_param('~depth_topic', "/static_zed2/zed_node/depth/depth_registered")

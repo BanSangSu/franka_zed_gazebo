@@ -184,7 +184,7 @@ class DINODetector(BaseDetector):
 
 class MultiDetectorSAM:
     def __init__(self, detector_type: str = "florence2", detector_config: Dict = None, 
-                 sam_checkpoint: str = None, sam_model_type: str = "vit_b", use_sam: bool = False):
+                 sam_checkpoint: str = None, sam_model_type: str = "vit_b", use_sam: bool = True):
         self.detector_type = detector_type
         self.use_sam = use_sam
         detector_config = detector_config or {}
@@ -202,9 +202,10 @@ class MultiDetectorSAM:
         
 
         # Join it with the checkpoint filename
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        sam_checkpoint = os.path.join(current_dir, "sam_vit_b_01ec64.pth")
-            
+        # current_dir = os.path.dirname(os.path.abspath(__file__))
+        # sam_checkpoint = os.path.join(current_dir, "sam_vit_b_01ec64.pth")
+        running_path = os.getcwd()
+        sam_checkpoint = os.path.join(running_path, "sam_vit_b_01ec64.pth")
         if SAM_AVAILABLE and self.use_sam and sam_checkpoint:
             self.device = self.detector.device
             if os.path.exists(sam_checkpoint):
