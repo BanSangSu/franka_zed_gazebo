@@ -20,7 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'contact_graspnet_pytorc
 
 from contact_graspnet_pytorch.contact_grasp_estimator import GraspEstimator
 from contact_graspnet_pytorch import config_utils
-from contact_graspnet_pytorch.contact_graspnet_pytorch.checkpoints import CheckpointIO 
+from contact_graspnet_pytorch.checkpoints import CheckpointIO 
 
 # We will use a standard service or a custom one. 
 # For this example, I will assume a wrapper class that can be imported 
@@ -38,7 +38,7 @@ class GraspServiceNode:
         self.ckpt_dir = rospy.get_param('~ckpt_dir', 'checkpoints/contact_graspnet')
         
         current_dir= os.path.dirname(os.path.abspath(__file__))
-        package_path = os.path.dirname(current_dir)
+        package_path = os.path.dirname(current_dir, 'contact_graspnet_pytorch')
         rospy.loginfo(f"Package exists at: {package_path}")
         
         ckpt_base = os.path.join(package_path, self.ckpt_dir)

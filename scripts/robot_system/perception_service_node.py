@@ -37,7 +37,7 @@ from detect_n_segment import MultiDetectorSAM
 # or use ServiceProxy if running separately.
 # For this file, I will assume we import the logic or have a helper function.
 try:
-    from generation_service_node import GraspServiceNode
+    from grasp_generation_service_node import GraspServiceNode
     # from contact_graspnet_pytorch import GraspServiceNode
     HAS_GRASP_NET = True
     print("GraspServiceNode imported successfully. Grasping enabled.")
