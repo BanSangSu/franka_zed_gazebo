@@ -10,8 +10,13 @@ import tf2_ros
 import tf2_geometry_msgs
 import moveit_commander
 from cv_bridge import CvBridge, CvBridgeError
-from geometry_msgs.msg import PointStamped, Pose, PoseArray, PoseStamped, Vector3
+from geometry_msgs.msg import PointStamped, Pose, PoseArray, PoseStamped, Vector3, Point
 from nav_msgs.msg import Odometry
+
+import colorsys
+    
+from visualization_msgs.msg import Marker, MarkerArray
+
 from sensor_msgs.msg import Image as RosImage, CameraInfo, PointCloud2, PointField
 from std_msgs.msg import Header
 import sensor_msgs.point_cloud2 as pc2
@@ -116,7 +121,7 @@ class SamCubeDetector:
         self.centroid_point_pub = rospy.Publisher('/sam_cube_detection/cubes_centroid_point', PointCloud2, queue_size=10)
         self.mapped_point_cloud = rospy.Publisher('/sam_cube_detection/cubes_mapped_point_cloud', PointCloud2, queue_size=10)
         self.seg_image_pub = rospy.Publisher('/sam_cube_detection/segmentation_image', RosImage, queue_size=10)
-        self.grasp_vis_pub = rospy.Publisher('/sam_cube_detection/grasp_poses', PoseArray, queue_size=10)
+        self.grasp_vis_pub = rospy.Publisher('/sam_cube_detection/grasp_poses', MarkerArray, queue_size=10)
         
         rospy.loginfo(f"SAM+GraspNode Started. Frame: {self.world_frame}")
 
@@ -167,7 +172,7 @@ class SamCubeDetector:
                 
                 # Re-organize results by ID
                 for g in grasp_results:
-                    detected_grasps_cam[g['id']] = {'pose': g['pose'], 'score': g['score']}
+                    detected_grasps_cam[g['id']] = {'pose': g.get('pose', None), 'score': g.get('score', None), 'contact_pts': g.get('contact_pts', None)}
 
             # 4. Process Geometry + Merge Grasp Info
             self.process_detections_and_grasps(
@@ -183,8 +188,6 @@ class SamCubeDetector:
     def process_detections_and_grasps(self, result, depth_image, point_cloud_msg, header, grasp_data, id_map):
         masks = result['segmentation']['masks']
         scores = result['detection']['scores']
-
-        print(f"Detection Scores: {scores}")
         
         # TF Lookup
         try:
@@ -195,9 +198,8 @@ class SamCubeDetector:
 
         detected_cubes = []
         all_points_world = []
-        grasp_pose_array = PoseArray()
-        grasp_pose_array.header.frame_id = self.world_frame
-        grasp_pose_array.header.stamp = header.stamp
+
+        grasp_markers = MarkerArray()
         
         # Iterate over unique IDs we sent to GraspNet
         for seg_id, index in id_map.items():
@@ -237,6 +239,8 @@ class SamCubeDetector:
                 
                 # Transform Grasp Matrix: Cam -> World
                 # T_world_grasp = T_world_cam * T_cam_grasp
+
+                g_pose_cam = np.array(g_pose_cam)
                 
                 # Get T_world_cam matrix
                 t = transform.transform.translation
@@ -246,13 +250,17 @@ class SamCubeDetector:
                 
                 T_world_grasp = np.dot(T_world_cam, g_pose_cam)
                 final_grasp_world = T_world_grasp
+
+                delete_all = Marker()
+                delete_all.action = Marker.DELETEALL
+                grasp_markers.markers.append(delete_all)
+
+                # Add to visualization array as Grasp points
+                grasp_marker = self.create_gripper_marker(T_world_grasp, seg_id, header)
+                grasp_markers.markers.append(grasp_marker)
                 
-                # Add to visualization array
-                p_msg = Pose()
-                p_msg.position.x, p_msg.position.y, p_msg.position.z = T_world_grasp[0:3, 3]
-                q_grasp = R.from_matrix(T_world_grasp[0:3, 0:3]).as_quat()
-                p_msg.orientation.x, p_msg.orientation.y, p_msg.orientation.z, p_msg.orientation.w = q_grasp
-                grasp_pose_array.poses.append(p_msg)
+                m_text = self.create_text_marker(T_world_grasp, seg_id, grasp_score, header)
+                grasp_markers.markers.append(m_text)
 
             # Store Cube Info
             cube = Cube(index, cube_pos, cube_quat, scores[index], [self.known_cube_size]*3, 
@@ -264,7 +272,7 @@ class SamCubeDetector:
 
         self.publish_centroid_point(detected_cubes, header.stamp)
         self.publish_mapped_point_cloud(all_points_world, header.stamp)
-        self.grasp_vis_pub.publish(grasp_pose_array)
+        self.grasp_vis_pub.publish(grasp_markers)
 
     def transform_points_to_world(self, points, transform):
         t = transform.transform.translation
@@ -317,6 +325,70 @@ class SamCubeDetector:
         msg = pc2.create_cloud(Header(stamp=stamp, frame_id=self.world_frame), fields, all_points)
         self.mapped_point_cloud.publish(msg)
 
+    def create_gripper_marker(self, T_world_grasp, grasp_id, header):
+        marker = Marker()
+        marker.header.frame_id = self.world_frame
+        marker.header.stamp = header.stamp
+        marker.ns = "grasps"
+        marker.id = grasp_id
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+        
+        marker.scale.x = 0.003 # 선 두께
+        
+        hue = (grasp_id * 0.137) % 1.0  # 고정된 간격으로 색상 변경
+        rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+        
+        marker.color.r, marker.color.g, marker.color.b = rgb
+        marker.color.a = 1.0 # 불투명도
+
+        # 그리퍼 기하학 정의 (GraspNet 표준 축 기준)
+        w = 0.04  # 절반 너비
+        d = 0.06  # 손가락 길이
+        
+        # 아래 좌표는 Z축이 정면, X축이 좌우인 일반적인 GraspNet 기준입니다.
+        # 만약 방향이 이상하면 이 리스트의 [x, y, z] 순서를 바꿔보세요.
+        local_pts = [
+            [-w, 0, 0], [w, 0, 0],   # 바닥 가로바 (X축 방향)
+            [-w, 0, 0], [-w, 0, d],  # 왼쪽 손가락 (Z축 방향 전진)
+            [w, 0, 0],  [w, 0, d]    # 오른쪽 손가락 (Z축 방향 전진)
+        ]
+
+        for pt in local_pts:
+            p_homo = np.array([pt[0], pt[1], pt[2], 1.0])
+            p_world = np.dot(T_world_grasp, p_homo)
+            
+            ros_pt = Point()
+            ros_pt.x, ros_pt.y, ros_pt.z = p_world[0:3]
+            marker.points.append(ros_pt)
+            
+        return marker
+    
+    def create_text_marker(self, T_world_grasp, grasp_id, score, header):
+        marker = Marker()
+        marker.header.frame_id = self.world_frame
+        marker.header.stamp = header.stamp
+        marker.ns = "grasp_labels"
+        marker.id = grasp_id
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.action = Marker.ADD
+        
+        # 그리퍼 위치보다 약간 위(Z축 방향)에 텍스트 배치
+        marker.pose.position.x = T_world_grasp[0, 3]
+        marker.pose.position.y = T_world_grasp[1, 3]
+        marker.pose.position.z = T_world_grasp[2, 3] + 0.04  # 4cm 위
+        
+        marker.scale.z = 0.025  # 글자 크기
+        hue = (grasp_id * 0.137) % 1.0  # 고정된 간격으로 색상 변경
+        rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+        
+        marker.color.r, marker.color.g, marker.color.b = rgb
+        marker.color.a = 1.0 # 불투명도
+        
+        # 표시할 텍스트 설정 (ID와 점수)
+        marker.text = f"ID: {grasp_id} ({score:.2f})"
+    
+        return marker
 if __name__ == '__main__':
     try:
         detector = SamCubeDetector()

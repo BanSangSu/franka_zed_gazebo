@@ -130,7 +130,7 @@ class GraspServiceNode:
 
         # show_image(rgb, segmap)
         # visualize_grasps(pc_full, pred_grasps_cam, scores, plot_opencv_cam=True, pc_colors=pc_colors)        
-        return pred_grasps_cam, scores
+        return pred_grasps_cam, scores, contact_pts
 
     def process_ros_data(self, rgb_msg, depth_msg, segmap, pc_msg, k_msg):
         # Convert ROS to Numpy
@@ -148,22 +148,33 @@ class GraspServiceNode:
             points = read_points(pc_msg, field_names=("x", "y", "z"), skip_nans=True)
             pc_full = np.array(list(points))   # or convert to NumPy if you prefer
             # Run Inference
-            grasps_dict, scores_dict = self.predict(rgb, depth, segmap, pc_full, cam_K)
+            grasps_dict, scores_dict, contact_pts_dict = self.predict(rgb, depth, segmap, pc_full, cam_K)
 
             # Format results for ROS (This would go into your Service Response)
             # Returning a simplified structure for demonstration
             results = []
             for obj_id, grasp_matrices in grasps_dict.items():
-                 # grasp_matrices is (N, 4, 4)
-                 # Get the best grasp (highest score) or all of them
-                 obj_scores = scores_dict[obj_id]
-                 best_idx = np.argmax(obj_scores)
-                 best_grasp = grasp_matrices[best_idx]
-                 results.append({
-                     "id": int(obj_id),
-                     "pose": best_grasp,
-                     "score": obj_scores[best_idx]
-                 })
+                obj_scores = scores_dict.get(obj_id, None)
+
+                if obj_scores is None or len(obj_scores) == 0:
+                    print(f"[WARN] Empty scores for obj_id {obj_id}, skipping")
+                    continue
+
+                if grasp_matrices is None or len(grasp_matrices) == 0:
+                    print(f"[WARN] Empty grasps for obj_id {obj_id}, skipping")
+                    continue
+
+                best_idx = int(np.argmax(obj_scores))
+
+                best_grasp = grasp_matrices[best_idx]
+                best_contact_pts = contact_pts_dict[obj_id][best_idx]
+
+                results.append({
+                    "id": int(obj_id),
+                    "pose": best_grasp,
+                    "score": float(obj_scores[best_idx]),
+                    "contact_point": best_contact_pts,
+                })
                  
             return results
 
