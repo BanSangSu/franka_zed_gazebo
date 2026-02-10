@@ -7,43 +7,37 @@ import os
 import numpy as np
 import cv2
 import tf2_ros
-import tf2_geometry_msgs
+import threading
 import moveit_commander
 from cv_bridge import CvBridge, CvBridgeError
-from geometry_msgs.msg import PointStamped, Pose, PoseArray, PoseStamped, Vector3, Point
+from geometry_msgs.msg import PointStamped, Pose, PoseStamped, Point, PoseArray, Vector3
 from nav_msgs.msg import Odometry
-
 import colorsys
     
 from visualization_msgs.msg import Marker, MarkerArray
-
 from sensor_msgs.msg import Image as RosImage, CameraInfo, PointCloud2, PointField
 from std_msgs.msg import Header
 import sensor_msgs.point_cloud2 as pc2
 from sklearn.decomposition import PCA
 from scipy.spatial.transform import Rotation as R
 
+from franka_zed_gazebo.srv import PerceptionService, PerceptionServiceResponse
+
 # --- Runtime Path Adjustment ---
 current_dir = os.path.dirname(os.path.realpath(__file__))
 parent_dir = os.path.dirname(current_dir) 
 
-# # Path for detect_n_segment
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-# Add path contact_graspnet
-# path: parent/contact_graspnet_pytorch/contact_graspnet_pytorch/
 grasp_node_path = os.path.join(parent_dir, 'contact_graspnet_pytorch')
 if grasp_node_path not in sys.path:
     sys.path.append(grasp_node_path)
 
 from detect_n_segment import MultiDetectorSAM 
-# Import the GraspNode class directly if running in same process, 
-# or use ServiceProxy if running separately.
-# For this file, I will assume we import the logic or have a helper function.
+
 try:
     from grasp_generation_service_node import GraspServiceNode
-    # from contact_graspnet_pytorch import GraspServiceNode
     HAS_GRASP_NET = True
     print("GraspServiceNode imported successfully. Grasping enabled.")
 except ImportError as e:
@@ -93,27 +87,22 @@ class SamCubeDetector:
             sam_model_type=self.sam_model_type
         )
         
-        # Initialize Grasp Net (If running in same process for simplicity)
-        # In a real heavy setup, use rospy.ServiceProxy('detect_grasps', ...)
         if HAS_GRASP_NET:
             self.grasp_detector = GraspServiceNode(init_node=False)
-            # We override the node init inside GraspServiceNode to avoid double init
-            # or simply use the helper methods.
-        
-        # 4. ROS Topics
-        image_topic = rospy.get_param('~image_topic', "static_zed2_camera/static_zed2/zed_node/left/image_rect_color")
-        camera_info_topic = rospy.get_param('~camera_info_topic', "static_zed2_camera/static_zed2/zed_node/left/camera_info")
-        depth_topic = rospy.get_param('~depth_topic', "static_zed2_camera/static_zed2/zed_node/depth/depth_registered")
-        point_cloud_topic = rospy.get_param('~point_cloud_topic', "static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered")
-        
-        image_sub = message_filters.Subscriber(image_topic, RosImage)
-        camera_info_sub = message_filters.Subscriber(camera_info_topic, CameraInfo)
-        depth_sub = message_filters.Subscriber(depth_topic, RosImage)
-        point_cloud_sub = message_filters.Subscriber(point_cloud_topic, PointCloud2)
 
-        ts = message_filters.ApproximateTimeSynchronizer([image_sub, camera_info_sub, depth_sub, point_cloud_sub], 10, 0.1)
-        ts.registerCallback(self.detection_callback)
+        # # real zed
+        # image_topic = rospy.get_param('~image_topic', "zed2/zed_node/left/image_rect_color")
+        # camera_info_topic = rospy.get_param('~camera_info_topic', "zed2/zed_node/left/camera_info")
+        # depth_topic = rospy.get_param('~depth_topic', "zed2/zed_node/depth/depth_registered")
+        # point_cloud_topic = rospy.get_param('~point_cloud_topic', "zed2/zed_node/point_cloud/cloud_registered")
         
+        # 4. ROS Topics Configuration (Strings only, subscriber creation happens on demand)
+        self.topic_image = rospy.get_param('~image_topic', "static_zed2_camera/static_zed2/zed_node/left/image_rect_color")
+        self.topic_info = rospy.get_param('~camera_info_topic', "static_zed2_camera/static_zed2/zed_node/left/camera_info")
+        self.topic_depth = rospy.get_param('~depth_topic', "static_zed2_camera/static_zed2/zed_node/depth/depth_registered")
+        self.topic_cloud = rospy.get_param('~point_cloud_topic', "static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered")
+        
+        # TF
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         
@@ -122,90 +111,179 @@ class SamCubeDetector:
         self.mapped_point_cloud = rospy.Publisher('/sam_cube_detection/cubes_mapped_point_cloud', PointCloud2, queue_size=10)
         self.seg_image_pub = rospy.Publisher('/sam_cube_detection/segmentation_image', RosImage, queue_size=10)
         self.grasp_vis_pub = rospy.Publisher('/sam_cube_detection/grasp_poses', MarkerArray, queue_size=10)
+        self.cube_id_vis_pub = rospy.Publisher('/sam_cube_detection/cube_id_markers', MarkerArray, queue_size=10)
+
+        # Service
+        self.service = rospy.Service('/perception_service', PerceptionService, self.service_callback)
         
-        rospy.loginfo(f"SAM+GraspNode Started. Frame: {self.world_frame}")
+        rospy.loginfo(f"SAM+GraspNode Service Ready. Frame: {self.world_frame}")
 
-    def detection_callback(self, image_msg, camera_info_msg, depth_msg, point_cloud_msg):
+    def acquire_frames(self, timeout=5.0):
+        """
+        Temporarily subscribes to topics, waits for ONE synchronized set of messages, 
+        and then unregisters. Returns None if timed out.
+        """
+        captured_data = {}
+        capture_event = threading.Event()
+
+        def sync_cb(img, info, depth, cloud):
+            captured_data['img'] = img
+            captured_data['info'] = info
+            captured_data['depth'] = depth
+            captured_data['cloud'] = cloud
+            capture_event.set()
+
+        # Create temporary subscribers
+        sub_img = message_filters.Subscriber(self.topic_image, RosImage)
+        sub_info = message_filters.Subscriber(self.topic_info, CameraInfo)
+        sub_depth = message_filters.Subscriber(self.topic_depth, RosImage)
+        sub_cloud = message_filters.Subscriber(self.topic_cloud, PointCloud2)
+
+        ts = message_filters.ApproximateTimeSynchronizer([sub_img, sub_info, sub_depth, sub_cloud], 10, 0.1)
+        ts.registerCallback(sync_cb)
+
+        # Wait for data
+        got_data = capture_event.wait(timeout)
+
+        # Cleanup immediately
+        sub_img.unregister()
+        sub_info.unregister()
+        sub_depth.unregister()
+        sub_cloud.unregister()
+        del ts
+
+        if got_data:
+            return captured_data['img'], captured_data['info'], captured_data['depth'], captured_data['cloud']
+        else:
+            return None
+
+    def service_callback(self, req):
+        """
+        The main Service Handler.
+        """
+        rospy.loginfo("Perception Service Called. Acquiring frames...")
+        
+        # 1. Get Data (One-Shot)
+        data = self.acquire_frames(timeout=5.0)
+        
+        if data is None:
+            rospy.logerr("Failed to acquire synchronized frames within timeout.")
+            # Depending on your .srv definition, return success=False
+            return PerceptionServiceResponse() # success=False implied or check your srv fields
+        
+        image_msg, camera_info_msg, depth_msg, point_cloud_msg = data
+        
+        # 2. Process
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
-            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="32FC1")
+            detected_cubes = self.process_pipeline(image_msg, camera_info_msg, depth_msg, point_cloud_msg)
             
-            if self.camera_K is None:
-                self.camera_K = np.array(camera_info_msg.K).reshape(3, 3)
-                self.camera_frame_id = camera_info_msg.header.frame_id
+            # 3. Construct Response
+            response = PerceptionServiceResponse()
+            response.success = True
+            response.num_cubes = len(detected_cubes)
+            response.message = f"Found {len(detected_cubes)} cubes"
             
-            # 1. SAM Inference
-            result = self.pipeline.detect_and_segment(cv_image, prompt=self.prompt, conf=0.25)
-
-            if result is None or 'detection' not in result or len(result['detection']['scores']) == 0:
-                return
+            response.cube_poses = PoseArray()
+            response.cube_poses.header.frame_id = self.world_frame
+            response.cube_poses.header.stamp = rospy.Time.now()
             
-            # 2. Process Cubes and Grasps
-            self.visualize_and_publish(result, cv_image, image_msg.header)
-            
-            # Prepare Segmap for GraspNet (Combine masks)
-            # ContactGraspnet uses a segmap where 0 is background, 1 is obj1, 2 is obj2...
-            segmap = np.zeros(cv_image.shape[:2], dtype=np.uint8)
-            masks = result['segmentation']['masks']
-            
-            # To map GraspNet ID back to our loop index
-            seg_id_to_index = {} 
-            
-            valid_mask_count = 0
-            for i, mask in enumerate(masks):
-                # Simple check to avoid noise
-                if np.sum(mask) > 50: 
-                    seg_id = valid_mask_count + 1
-                    segmap[mask > 0] = seg_id
-                    seg_id_to_index[seg_id] = i
-                    valid_mask_count += 1
-
-            # 3. Call GraspNet (Simulating Service Call)
-            detected_grasps_cam = {} # Dict {seg_id: {pose: 4x4, score: float}}
-            if HAS_GRASP_NET and valid_mask_count > 0:
-                # In real ROS Service: 
-                # req = DetectGraspsRequest(image_msg, depth_msg, bridge.cv2_to_imgmsg(segmap_combined), camera_info_msg)
-                # resp = service_proxy(req)
+            for cube in detected_cubes:
+                p = Pose()
+                p.position.x, p.position.y, p.position.z = cube.position
+                p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = cube.orientation
+                response.cube_poses.poses.append(p)
                 
-                # Direct call for now:
-                grasp_results = self.grasp_detector.process_ros_data(image_msg, depth_msg, segmap, point_cloud_msg, camera_info_msg)
+                response.confidences.append(cube.confidence)
                 
-                # Re-organize results by ID
-                for g in grasp_results:
-                    detected_grasps_cam[g['id']] = {'pose': g.get('pose', None), 'score': g.get('score', None), 'contact_pts': g.get('contact_pts', None)}
-
-            # 4. Process Geometry + Merge Grasp Info
-            self.process_detections_and_grasps(
-                result, depth_image, point_cloud_msg, image_msg.header, 
-                detected_grasps_cam, seg_id_to_index
-            )
+                dim = Vector3()
+                dim.x, dim.y, dim.z = cube.dimensions
+                response.dimensions.append(dim)
+                
+                response.labels.append("cube")
+            
+            rospy.loginfo(f"Service completed. Found {len(detected_cubes)} objects.")
+            return response
             
         except Exception as e:
-            rospy.logerr(f"Callback error: {e}")
+            rospy.logerr(f"Error during processing: {e}")
             import traceback
             traceback.print_exc()
+            return PerceptionServiceResponse()
 
-    def process_detections_and_grasps(self, result, depth_image, point_cloud_msg, header, grasp_data, id_map):
+
+    def process_pipeline(self, image_msg, camera_info_msg, depth_msg, point_cloud_msg):
+        """
+        Core logic separated from ROS communication. Returns list of Cube objects.
+        """
+        cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
+        depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="32FC1")
+        
+        if self.camera_K is None:
+            self.camera_K = np.array(camera_info_msg.K).reshape(3, 3)
+            self.camera_frame_id = camera_info_msg.header.frame_id
+        
+        # 1. SAM Inference
+        result = self.pipeline.detect_and_segment(cv_image, prompt=self.prompt, conf=0.25)
+
+        if result is None or 'detection' not in result or len(result['detection']['scores']) == 0:
+            rospy.logwarn("No objects detected by SAM.")
+            return []
+        
+        # Visualize Segmentations
+        self.visualize_and_publish(result, cv_image, image_msg.header)
+        
+        # Prepare Segmap for GraspNet
+        segmap = np.zeros(cv_image.shape[:2], dtype=np.uint8)
+        masks = result['segmentation']['masks']
+        seg_id_to_index = {} 
+        
+        valid_mask_count = 0
+        for i, mask in enumerate(masks):
+            if np.sum(mask) > 50: 
+                seg_id = valid_mask_count + 1
+                segmap[mask > 0] = seg_id
+                seg_id_to_index[seg_id] = i
+                valid_mask_count += 1
+
+        # 2. Call GraspNet
+        detected_grasps_cam = {} 
+        if HAS_GRASP_NET and valid_mask_count > 0:
+            grasp_results = self.grasp_detector.process_ros_data(image_msg, depth_msg, segmap, point_cloud_msg, camera_info_msg)
+            for g in grasp_results:
+                detected_grasps_cam[g['id']] = {'pose': g.get('pose', None), 'score': g.get('score', None)}
+
+        # 3. Process Geometry & Merge
+        detected_cubes = self.process_geometry_and_grasps(
+            result, depth_image, point_cloud_msg, image_msg.header, 
+            detected_grasps_cam, seg_id_to_index
+        )
+        
+        return detected_cubes
+
+    def process_geometry_and_grasps(self, result, depth_image, point_cloud_msg, header, grasp_data, id_map):
         masks = result['segmentation']['masks']
         scores = result['detection']['scores']
         
-        # TF Lookup
         try:
             transform = self.tf_buffer.lookup_transform(
-                self.world_frame, self.camera_frame_id, header.stamp, rospy.Duration(0.1))
-        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException):
-            return
+                self.world_frame, self.camera_frame_id, header.stamp, rospy.Duration(0.5)) # Increased duration for safety
+        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException) as e:
+            rospy.logwarn(f"TF Error: {e}")
+            return []
 
         detected_cubes = []
         all_points_world = []
-
         grasp_markers = MarkerArray()
         
-        # Iterate over unique IDs we sent to GraspNet
+        # Clear previous markers
+        delete_all = Marker()
+        delete_all.action = Marker.DELETEALL
+        grasp_markers.markers.append(delete_all)
+        
         for seg_id, index in id_map.items():
             mask = masks[index]
             
-            # --- Geometric Position Logic (Existing) ---
+            # Read Points
             rows, cols = np.where(mask > 0)
             uvs = np.stack([cols, rows], axis=1).tolist()
             point_gen = pc2.read_points(point_cloud_msg, field_names=("x", "y", "z"), skip_nans=True, uvs=uvs)
@@ -220,29 +298,23 @@ class SamCubeDetector:
                     self.table_y_min < w_centroid[1] < self.table_y_max):
                 continue
 
-            # Orientation via PCA
+            # PCA Orientation
             pca_points = points_world - w_centroid
             pca = PCA(n_components=2).fit(pca_points[:, :2])
             angle = np.arctan2(pca.components_[0, 1], pca.components_[0, 0])
             
-            cube_pos = [w_centroid[0], w_centroid[1], self.known_cube_size / 2.0]
+            cube_pos = [w_centroid[0], w_centroid[1], w_centroid[2]]
             cube_quat = R.from_euler('z', angle).as_quat()
 
-            # --- Grasp Processing ---
+            # Grasp Processing
             final_grasp_world = None
             grasp_score = 0.0
             
             if seg_id in grasp_data:
-                # Grasp is in Camera Frame (4x4 Matrix)
-                g_pose_cam = grasp_data[seg_id]['pose']
+                g_pose_cam = np.array(grasp_data[seg_id]['pose'])
                 grasp_score = grasp_data[seg_id]['score']
                 
-                # Transform Grasp Matrix: Cam -> World
-                # T_world_grasp = T_world_cam * T_cam_grasp
-
-                g_pose_cam = np.array(g_pose_cam)
-                
-                # Get T_world_cam matrix
+                # Transform Cam -> World
                 t = transform.transform.translation
                 q = transform.transform.rotation
                 T_world_cam = self.quaternion_matrix([q.x, q.y, q.z, q.w])
@@ -251,18 +323,12 @@ class SamCubeDetector:
                 T_world_grasp = np.dot(T_world_cam, g_pose_cam)
                 final_grasp_world = T_world_grasp
 
-                delete_all = Marker()
-                delete_all.action = Marker.DELETEALL
-                grasp_markers.markers.append(delete_all)
-
-                # Add to visualization array as Grasp points
+                # Visualization Markers
                 grasp_marker = self.create_gripper_marker(T_world_grasp, seg_id, header)
                 grasp_markers.markers.append(grasp_marker)
-                
                 m_text = self.create_text_marker(T_world_grasp, seg_id, grasp_score, header)
                 grasp_markers.markers.append(m_text)
 
-            # Store Cube Info
             cube = Cube(index, cube_pos, cube_quat, scores[index], [self.known_cube_size]*3, 
                        grasp_pose=final_grasp_world, grasp_score=grasp_score)
             
@@ -273,6 +339,8 @@ class SamCubeDetector:
         self.publish_centroid_point(detected_cubes, header.stamp)
         self.publish_mapped_point_cloud(all_points_world, header.stamp)
         self.grasp_vis_pub.publish(grasp_markers)
+        
+        return detected_cubes
 
     def transform_points_to_world(self, points, transform):
         t = transform.transform.translation
@@ -283,19 +351,12 @@ class SamCubeDetector:
         return np.dot(matrix, points_homo.T).T[:, :3]
 
     def quaternion_matrix(self, quaternion):
-        # Helper to avoid importing tf.transformations which might be deprecated in py3
         mat = np.eye(4)
-    
         if len(quaternion) == 4:
-            # 2. Get the 3x3 rotation matrix from Scipy
             rotation_3x3 = R.from_quat(quaternion).as_matrix()
-            
-            # 3. Insert the 3x3 rotation into the top-left of the 4x4 matrix
             mat[0:3, 0:3] = rotation_3x3
-            
         return mat
 
-    # ... (Keep existing visualization and helper methods: update_planning_scene, visualize_and_publish, etc.) ...
     def update_planning_scene(self, idx, pos, q):
         ps = PoseStamped()
         ps.header.frame_id = self.world_frame
@@ -333,35 +394,24 @@ class SamCubeDetector:
         marker.id = grasp_id
         marker.type = Marker.LINE_LIST
         marker.action = Marker.ADD
-        
-        marker.scale.x = 0.003 # 선 두께
-        
-        hue = (grasp_id * 0.137) % 1.0  # 고정된 간격으로 색상 변경
+        marker.scale.x = 0.003 
+        hue = (grasp_id * 0.137) % 1.0  
         rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-        
         marker.color.r, marker.color.g, marker.color.b = rgb
-        marker.color.a = 1.0 # 불투명도
-
-        # 그리퍼 기하학 정의 (GraspNet 표준 축 기준)
-        w = 0.04  # 절반 너비
-        d = 0.06  # 손가락 길이
-        
-        # 아래 좌표는 Z축이 정면, X축이 좌우인 일반적인 GraspNet 기준입니다.
-        # 만약 방향이 이상하면 이 리스트의 [x, y, z] 순서를 바꿔보세요.
+        marker.color.a = 1.0 
+        w = 0.04  
+        d = 0.06  
         local_pts = [
-            [-w, 0, 0], [w, 0, 0],   # 바닥 가로바 (X축 방향)
-            [-w, 0, 0], [-w, 0, d],  # 왼쪽 손가락 (Z축 방향 전진)
-            [w, 0, 0],  [w, 0, d]    # 오른쪽 손가락 (Z축 방향 전진)
+            [-w, 0, 0], [w, 0, 0],   
+            [-w, 0, 0], [-w, 0, d],  
+            [w, 0, 0],  [w, 0, d]    
         ]
-
         for pt in local_pts:
             p_homo = np.array([pt[0], pt[1], pt[2], 1.0])
             p_world = np.dot(T_world_grasp, p_homo)
-            
             ros_pt = Point()
             ros_pt.x, ros_pt.y, ros_pt.z = p_world[0:3]
             marker.points.append(ros_pt)
-            
         return marker
     
     def create_text_marker(self, T_world_grasp, grasp_id, score, header):
@@ -372,23 +422,41 @@ class SamCubeDetector:
         marker.id = grasp_id
         marker.type = Marker.TEXT_VIEW_FACING
         marker.action = Marker.ADD
-        
-        # 그리퍼 위치보다 약간 위(Z축 방향)에 텍스트 배치
         marker.pose.position.x = T_world_grasp[0, 3]
         marker.pose.position.y = T_world_grasp[1, 3]
-        marker.pose.position.z = T_world_grasp[2, 3] + 0.04  # 4cm 위
-        
-        marker.scale.z = 0.025  # 글자 크기
-        hue = (grasp_id * 0.137) % 1.0  # 고정된 간격으로 색상 변경
+        marker.pose.position.z = T_world_grasp[2, 3] + 0.04  
+        marker.scale.z = 0.025  
+        hue = (grasp_id * 0.137) % 1.0  
         rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-        
         marker.color.r, marker.color.g, marker.color.b = rgb
-        marker.color.a = 1.0 # 불투명도
-        
-        # 표시할 텍스트 설정 (ID와 점수)
+        marker.color.a = 1.0 
         marker.text = f"ID: {grasp_id} ({score:.2f})"
-    
         return marker
+    
+    def create_cube_label_marker(self, pos, cube_id, header):
+        marker = Marker()
+        marker.header.frame_id = self.world_frame
+        marker.header.stamp = header.stamp
+        marker.ns = "cube_labels"
+        marker.id = cube_id
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.action = Marker.ADD
+        
+        # Position the marker slightly above the cube center (+0.05m)
+        marker.pose.position.x = pos[0]
+        marker.pose.position.y = pos[1]
+        marker.pose.position.z = pos[2] + 0.05 
+        marker.pose.orientation.w = 1.0
+        
+        marker.scale.z = 0.03  # Text size (3cm)
+        
+        # Set color to yellow or white for better visibility
+        marker.color.r, marker.color.g, marker.color.b = (1.0, 1.0, 0.0) # Yellow
+        marker.color.a = 1.0
+        
+        marker.text = f"ID: {cube_id}"
+        return marker
+
 if __name__ == '__main__':
     try:
         detector = SamCubeDetector()
