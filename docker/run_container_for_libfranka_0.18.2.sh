@@ -32,18 +32,20 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   fi
 else
   echo "Creating and starting container ${CONTAINER_NAME}..."
-  # exec docker run -it --rm \ # Automatically remove the container on exit
-  exec docker run -it \ # Keep the container after it stops
+  
+  # Automatically remove the container on exit
+  # exec docker run -it --rm \
+  
+  # Keep the container after it stops
+  exec docker run -it \
     --name "${CONTAINER_NAME}" \
     --network host \
     --privileged \
-    # --ipc=host \    # Enable shared memory to prevent bus errors in ROS/GUI
     -e DISPLAY="${DISPLAY}" \
     -e QT_X11_NO_MITSHM=1 \
     -e NVIDIA_DRIVER_CAPABILITIES=all \
     -e NVIDIA_VISIBLE_DEVICES=all \
     -e TERM=xterm-256color \
-    # -e ROS_NAMESPACE=/group_rheinrobot \ # Optional: Groups all ROS nodes under this namespace
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
     -v /dev:/dev \
     -v "${WORKSPACE_SRC}:/opt/ros_ws/src/local_src" \
@@ -51,3 +53,8 @@ else
     "${IMAGE_NAME}" \
     bash
 fi
+
+# If you need specific features, add command below on the docker run -it  
+    # --ipc=host \    # Enable shared memory to prevent bus errors in ROS/GUI
+    # -e ROS_NAMESPACE=/group_rheinrobot \ # Optional: Groups all ROS nodes under this namespace
+    
