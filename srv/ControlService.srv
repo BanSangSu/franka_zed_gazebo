@@ -1,0 +1,6 @@
+# Request
+moveit_msgs/RobotTrajectory trajectory
+---
+# Response
+bool success
+string message

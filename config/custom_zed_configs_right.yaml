@@ -1,0 +1,51 @@
+# Namespace will usually be /zedr when you set camera_name:=zedr
+camera_name: "zedr"
+camera_model: "zed2"
+serial_number: 21177909
+
+# General
+frame_rate: 30.0
+gpu_id: 0
+svo_file: ""
+camera_timeout_sec: 5.0
+pub_resolution: "HD720"    # HD2K, HD1080, HD720, VGA
+pub_frame_rate: 30.0
+
+# Depth
+depth_mode: "ULTRA"        # NONE, PERFORMANCE, QUALITY, ULTRA
+depth_stabilization: true
+openni_depth_mode: false
+depth_maximum_distance: 20.0
+depth_minimum_distance: 0.2
+confidence_threshold: 50
+textured_confidence_threshold: 50
+
+# Sensors
+enable_imu: true
+enable_barometer: false
+enable_magnetometer: false
+enable_temperature: false
+
+# Pose / odometry
+publish_tf: false
+publish_imu_tf: false
+publish_map_tf: false
+publish_urdf: true
+pos_tracking_enabled: false
+publish_pose: true
+publish_tf_imu_frame: false
+
+# Point cloud
+point_cloud_freq: 15.0
+point_cloud_disabled: false
+
+# Image publishing
+publish_left: true
+publish_right: true
+publish_rgb: true
+publish_depth: true
+publish_confidence: false
+publish_disparity: false
+
+# Diagnostics
+self_diag_freq: 1.0

@@ -1,0 +1,9 @@
+<library path="lib/libfranka_zed_gazebo">
+  <class name="franka_zed_gazebo/JointImpedanceCommandController"
+         type="franka_zed_gazebo::JointImpedanceCommandController"
+         base_class_type="controller_interface::ControllerBase">
+    <description>
+      Joint impedance controller that tracks trajectories streamed via JointState topic.
+    </description>
+  </class>
+</library>

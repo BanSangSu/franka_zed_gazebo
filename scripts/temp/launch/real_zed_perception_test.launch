@@ -1,0 +1,21 @@
+<launch>
+  <!-- Simulationstakt nutzen (verhindert den Zeit-Zukunfts-Fehler) -->
+  <!-- Setzen Sie diesen Wert auf "false", wenn Sie echte Hardware nutzen -->
+  <!-- <param name="/use_sim_time" value="true" /> -->
+
+  <!-- Statischer Transform Publisher -->
+  <!-- Syntax: x y z yaw pitch roll frame_id child_frame_id period_in_ms -->
+<!-- 
+  <include file="$(find zed_wrapper)/launch/zed2.launch"/> -->
+
+
+      <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node.py" output="screen">
+    <!-- <rosparam command="load" file="$(find franka_zed_gazebo)/config/perception_params.yaml"/> -->
+  </node>
+
+      <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="static_transform_publisher_zedr"
+        output="screen"
+        args="0.8490203511285661 0.5174056515518837 0.5714417397720613
+              0.37194401469152666 0.07157716575364947 -0.9172819763062685 0.12299648458996869
+              panda_link0 zedr_base_link" /> -->
+</launch>

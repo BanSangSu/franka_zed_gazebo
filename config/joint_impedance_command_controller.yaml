@@ -1,0 +1,26 @@
+joint_impedance_controller:   # keeps your existing topic name
+  type: franka_zed_gazebo/JointImpedanceCommandController
+  joint_names:
+    - panda_joint1
+    - panda_joint2
+    - panda_joint3
+    - panda_joint4
+    - panda_joint5
+    - panda_joint6
+    - panda_joint7
+  # k_gains: [600, 600, 600, 600, 250, 150, 50]
+  # d_gains: [50,  50,  50,  50,  30,  25,  15]
+  k_gains: [80, 80, 80, 80, 60, 100, 50]
+  d_gains: [2,  2,  2,  2,  1.5, 2,   1]
+
+  # k_gains: [50, 50, 50, 50, 20, 10, 5]
+  # d_gains: [20,20,20,20,10,8,5]
+  # k_gains: [15.0, 15.0, 15.0, 15.0, 5.0, 2.0, 1.0]
+  # d_gains: [10.0, 10.0, 10.0, 10.0, 5.0, 2.0, 1.0]
+  # k_gains: [10.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+  # d_gains: [10.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+  radius: 0.1
+  acceleration_time: 2.0
+  vel_max: 0.15
+  publish_rate: 10.0
+  coriolis_factor: 1.0

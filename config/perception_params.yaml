@@ -1,0 +1,4 @@
+debug_mode: true
+detector_type: "florence2"
+prompt: "small cube"
+known_cube_size: 0.045

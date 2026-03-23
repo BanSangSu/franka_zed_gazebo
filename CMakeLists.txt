@@ -7,7 +7,7 @@ project(franka_zed_gazebo)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED)
+# find_package(catkin REQUIRED)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -98,12 +98,12 @@ find_package(catkin REQUIRED)
 ## LIBRARIES: libraries you create in this project that dependent projects also need
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
-catkin_package(
+#catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES franka_zed_gazebo
 #  CATKIN_DEPENDS other_catkin_pkg
 #  DEPENDS system_lib
-)
+#)
 
 ###########
 ## Build ##
@@ -200,3 +200,75 @@ include_directories(
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+add_compile_options(-std=c++17)
+
+find_package(Franka REQUIRED)
+
+find_package(catkin REQUIRED COMPONENTS
+  roscpp
+  rospy
+  std_msgs
+  message_generation
+  moveit_msgs
+  actionlib_msgs
+  geometry_msgs
+
+  controller_interface
+  hardware_interface
+  franka_hw
+  realtime_tools
+  pluginlib
+  sensor_msgs
+)
+
+add_action_files(
+  FILES
+  ControlAction.action
+  GripperAction.action
+  PlanningAction.action
+)
+
+add_service_files(
+  FILES
+  ControlService.srv
+  GripperService.srv
+  PerceptionService.srv
+  PlanningService.srv
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  moveit_msgs
+  actionlib_msgs
+  geometry_msgs
+)
+
+catkin_package(
+  CATKIN_DEPENDS message_runtime std_msgs moveit_msgs actionlib_msgs geometry_msgs
+)
+
+include_directories(
+  ${catkin_INCLUDE_DIRS}
+)
+
+
+add_library(franka_zed_gazebo
+  src/joint_impedance_command_controller.cpp
+)
+
+target_include_directories(franka_zed_gazebo PUBLIC
+  include
+  ${catkin_INCLUDE_DIRS}
+  /usr/local/include
+)
+
+target_link_libraries(franka_zed_gazebo
+  ${catkin_LIBRARIES}
+  Franka::Franka
+)
+
+install(FILES franka_zed_gazebo_plugins.xml
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)

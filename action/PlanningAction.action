@@ -1,0 +1,37 @@
+# PlanningAction.action
+# Action definition for motion planning, object manipulation, and home positioning
+
+# ===== GOAL =====
+# Action type: "MOVE", "ATTACH", "DETACH", "HOME"
+string action
+
+# Target pose for motion planning (used when action = "MOVE" or empty)
+geometry_msgs/Pose target_pose
+
+# Object name for attach/detach operations (used when action = "ATTACH" or "DETACH")
+string object_name
+
+# Optional: Allow collision with this object during planning (e.g., for pre-grasp approach)
+string allowed_collision_object
+
+---
+
+# ===== RESULT =====
+# Planning success status
+bool success
+
+# Human-readable result message
+string message
+
+# Planned trajectory (empty if action was ATTACH/DETACH)
+moveit_msgs/RobotTrajectory trajectory
+
+---
+
+# ===== FEEDBACK =====
+# Planning progress (0.0 to 1.0)
+float64 progress
+
+# Current status description (e.g., "Computing motion plan", "Attaching object")
+string status
+

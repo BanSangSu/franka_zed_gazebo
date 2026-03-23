@@ -1,0 +1,28 @@
+<launch>
+  <arg name="robot_ip" default="10.10.10.10" />
+  <arg name="load_gripper" default="true" />
+      <!-- 10.10.10.10 Athena -->
+      <!-- 192.168.2.55 Poseidon -->
+
+  <include file="$(find panda_moveit_config)/launch/franka_control.launch"
+           pass_all_args="true" />
+
+  <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand.launch" />
+
+
+
+  <!-- For impedance control -->
+  <!-- Load gains -->
+  <rosparam file="$(find franka_zed_gazebo)/config/joint_impedance_command_controller.yaml"
+            command="load" />
+
+  <!-- Switch from position_joint_trajectory_controller to your impedance controller -->
+  <node name="stop_position_controller" pkg="controller_manager" type="controller_manager"
+        args="stop position_joint_trajectory_controller"
+        launch-prefix="bash -c 'sleep 0.5; $0 $@'" />
+
+  <node name="impedance_controller_spawner" pkg="controller_manager" type="spawner"
+        args="joint_impedance_controller"
+        launch-prefix="bash -c 'sleep 0.7; $0 $@'" />
+
+</launch>
