@@ -125,7 +125,7 @@ Keep your local fork up-to-date:
 
 ```bash
 cd /opt/ros_ws/src/franka_zed_gazebo
-git pull
+git pull --recurse-submodules
 cd ../..
 ```
 
