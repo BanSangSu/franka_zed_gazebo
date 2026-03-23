@@ -57,7 +57,12 @@
   <export>
     <!-- Other tools can request additional information be placed here -->
     <gazebo_ros gazebo_model_path="${prefix}/meshes"/> 
+    <controller_interface plugin="${prefix}/franka_zed_gazebo_plugins.xml"/>
   </export>
+
+  <build_depend>controller_interface</build_depend>
+  <exec_depend>controller_interface</exec_depend>
+
 
   <!-- Build Dependencies -->
   <build_depend>message_generation</build_depend>

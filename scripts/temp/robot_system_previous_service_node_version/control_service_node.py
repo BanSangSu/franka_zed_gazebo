@@ -32,9 +32,9 @@ class ControlServiceNode:
         gripper_group_name = rospy.get_param('~gripper_group', 'panda_hand')
         self.gripper_group = moveit_commander.MoveGroupCommander(gripper_group_name, wait_for_servers=30)
 
-        # Configure execution parameters
-        self.move_group.set_max_velocity_scaling_factor(rospy.get_param('~max_velocity', 0.5))
-        self.move_group.set_max_acceleration_scaling_factor(rospy.get_param('~max_acceleration', 0.5))
+        # # Configure execution parameters
+        # self.move_group.set_max_velocity_scaling_factor(rospy.get_param('~max_velocity', 0.5))
+        # self.move_group.set_max_acceleration_scaling_factor(rospy.get_param('~max_acceleration', 0.5))
         
         # Gripper parameters
         self.default_grasp_force = rospy.get_param('~default_grasp_force', 20.0)  # Increased to 60N

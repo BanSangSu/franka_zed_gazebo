@@ -26,8 +26,9 @@ class Open3DPerceptionNode:
        rospy.sleep(1.0)
       
        # 2. Parameters & Configuration
+    #    self.world_frame = rospy.get_param('~world_frame', 'panda_link0')
        self.world_frame = rospy.get_param('~world_frame', 'world')
-       self.known_cube_size = rospy.get_param('~known_cube_size', 0.045)
+       self.known_cube_size = rospy.get_param('~known_cube_size', 0.045)  # 4.5cm
        self.target_z_ground_truth = 0.022  # Reference Z from Gazebo
        self.debug_mode = rospy.get_param('~debug_mode', True)
       
@@ -44,6 +45,7 @@ class Open3DPerceptionNode:
        self.target_cube_pcd = self.target_cube_mesh.sample_points_uniformly(number_of_points=1000)
       
        # 4. Publishers & Subscribers
+    #    pc_topic = "/zedr/zed_node/point_cloud/cloud_registered"
        pc_topic = "/static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered"
        self.pc_sub = rospy.Subscriber(pc_topic, PointCloud2, self.pointcloud_callback)
       
@@ -124,9 +126,36 @@ class Open3DPerceptionNode:
        pcd = o3d.geometry.PointCloud()
        pcd.points = o3d.utility.Vector3dVector(np.array(points))
 
-
        # 2. Pre-processing (Voxel Downsample)
        pcd_down = pcd.voxel_down_sample(0.002)
+
+##### test code 
+
+    #    # 1. Prepare Open3D Point Cloud
+    #    points = list(pc2.read_points(pc_msg, skip_nans=True, field_names=("x", "y", "z")))
+    
+    # # Check if we actually got points
+    #    if not points or len(points) == 0:
+    #         rospy.logwarn("Received empty point cloud, skipping processing.")
+    #         return []
+
+    #    pcd = o3d.geometry.PointCloud()
+    #    pcd.points = o3d.utility.Vector3dVector(np.array(points))
+
+    #    # Safety check: Ensure the cloud has a valid bounding box
+    #    if not pcd.has_points():
+    #     return []
+
+########
+
+       # 2. Pre-processing (Voxel Downsample)
+       # If the cloud is very sparse, voxel_down_sample can still fail. 
+       # You can wrap this in a try-except or check the extent.
+       try:
+            pcd_down = pcd.voxel_down_sample(0.002)
+       except RuntimeError as e:
+            rospy.logerr(f"Voxel downsample failed: {e}")
+            return []
       
        # Filter floor/distance (Camera Frame Z is depth)
        points_np = np.asarray(pcd_down.points)

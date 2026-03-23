@@ -18,11 +18,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from sensor_msgs.msg import Image as RosImage, CameraInfo, PointCloud2, PointField
 from std_msgs.msg import Header
 import sensor_msgs.point_cloud2 as pc2
-
 from sklearn.decomposition import PCA
-import open3d as o3d
-import copy
-
 from scipy.spatial.transform import Rotation as R
 
 from franka_zed_gazebo.srv import PerceptionService, PerceptionServiceResponse
@@ -66,23 +62,20 @@ class SamCubeDetector:
         # 1. Initialize MoveIt
         moveit_commander.roscpp_initialize(sys.argv)
         self.scene = moveit_commander.PlanningSceneInterface()
-        self.clear_planning_scene()
 
         # 2. Parameters
         self.detector_type = rospy.get_param('~detector_type', 'florence2')
         self.sam_checkpoint = rospy.get_param('~sam_checkpoint', 'sam_vit_b_01ec64.pth')
         self.sam_model_type = rospy.get_param('~sam_model_type', 'vit_b')
-        # self.prompt = rospy.get_param('~prompt', 'carrot')
         self.prompt = rospy.get_param('~prompt', 'small cube')
-        # self.world_frame = rospy.get_param('~world_frame', 'panda_link0')
-        self.world_frame = rospy.get_param('~world_frame', 'world')
-        # self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
-        self.known_cube_size = rospy.get_param('~known_cube_size', 0.045)  # 4.5cm
+        self.world_frame = rospy.get_param('~world_frame', 'panda_link0')
+        self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
+        self.known_cube_size = 0.045
         
         self.table_x_min, self.table_x_max = 0.3, 1.0
         self.table_y_min, self.table_y_max = -0.4, 0.4
         
-        self.create_table()
+        # self.create_table()
 
         self.bridge = CvBridge()
         self.camera_K = None
@@ -128,20 +121,13 @@ class SamCubeDetector:
         
         rospy.loginfo(f"SAM+GraspNode Service Ready. Frame: {self.world_frame}")
 
-    def clear_planning_scene(self):
-        """Remove ALL collision objects (table + cubes) from MoveIt scene"""
-        self.scene.clear()
-        rospy.sleep(1.0)
-        rospy.loginfo("✓ Cleared ALL objects from planning scene")
-
-
     def create_table(self):
         table_pose = PoseStamped()
         table_pose.header.frame_id = self.world_frame
         table_pose.header.stamp = rospy.Time.now()
         table_pose.pose.position.x = 0.5  # Table center X (matches your table bounds 0.3-1.0)
         table_pose.pose.position.y = 0.0   # Table center Y (matches -0.4 to 0.4)
-        table_pose.pose.position.z = -0.25 # -0.3 # Half table height (5cm total height)
+        table_pose.pose.position.z = -0.25 # Half table height (5cm total height)
         table_pose.pose.orientation.w = 1.0
         
         # Table size: width=0.7m (X), length=0.8m (Y), height=0.05m (Z)
@@ -294,15 +280,11 @@ class SamCubeDetector:
     def process_geometry_and_grasps(self, result, depth_image, point_cloud_msg, header, grasp_data, id_map):
         masks = result['segmentation']['masks']
         scores = result['detection']['scores']
-        print("CameraInfo frame:", self.camera_frame_id)
-        print("PointCloud frame:", point_cloud_msg.header.frame_id)
-
+        
         try:
-            transform_cam = self.tf_buffer.lookup_transform(
-                self.world_frame, point_cloud_msg.header.frame_id, header.stamp, rospy.Duration(0.5)) # Increased duration for safety
-            transform_grasp = self.tf_buffer.lookup_transform(
+            transform = self.tf_buffer.lookup_transform(
+                # self.world_frame, self.po_camera_frame, header.stamp, rospy.Duration(0.5)) # Increased duration for safety
                 self.world_frame, self.camera_frame_id, header.stamp, rospy.Duration(0.5)) # Increased duration for safety
-                # self.world_frame, self.camera_frame_id, header.stamp, rospy.Duration(0.5)) # Increased duration for safety
         except (tf2_ros.LookupException, tf2_ros.ExtrapolationException) as e:
             rospy.logwarn(f"TF Error: {e}")
             return []
@@ -327,54 +309,20 @@ class SamCubeDetector:
             
             if len(points_cam) < 50: continue
 
-            points_world = self.transform_points_to_world(points_cam, transform_cam)
+            points_world = self.transform_points_to_world(points_cam, transform)
             w_centroid = np.mean(points_world, axis=0)
             
             if not (self.table_x_min < w_centroid[0] < self.table_x_max and 
                     self.table_y_min < w_centroid[1] < self.table_y_max):
                 continue
 
-            # ICP Refinement (Using Identity Rotation as starting guess)
-            try:
-                # Initial transformation: Centroid position with no initial rotation
-                initial_trans = np.eye(4)
-                initial_trans[:3, 3] = w_centroid
-
-                # Perform ICP refinement
-                icp_matrix = self.refine_pose_with_icp(points_world, initial_trans)
-                
-                # Extract refined pose
-                refined_pos = icp_matrix[:3, 3]
-                refined_quat = R.from_matrix(icp_matrix[:3, :3]).as_quat()
-                
-            except Exception as e:
-                rospy.logwarn(f"ICP 정밀 보정 실패: {e}. 기본 Centroid 결과로 대체합니다.")
-                refined_pos = w_centroid
-                refined_quat = [0, 0, 0, 1] # Identity quaternion
-
-            # # PCA Orientation
-            # pca_points = points_world - w_centroid
-            # pca = PCA(n_components=2).fit(pca_points[:, :2])
-            # initial_angle = np.arctan2(pca.components_[0, 1], pca.components_[0, 0])
+            # PCA Orientation
+            pca_points = points_world - w_centroid
+            pca = PCA(n_components=2).fit(pca_points[:, :2])
+            angle = np.arctan2(pca.components_[0, 1], pca.components_[0, 0])
             
-            # # ICP Refinement
-            # try:
-            #     # 초기 변환 행렬 생성 (Centroid + PCA Angle)
-            #     init_rot = R.from_euler('z', initial_angle).as_matrix()
-            #     initial_trans = np.eye(4)
-            #     initial_trans[:3, :3] = init_rot
-            #     initial_trans[:3, 3] = w_centroid
-
-            #     # ICP 수행
-            #     icp_matrix = self.refine_pose_with_icp(points_world, initial_trans)
-                
-            #     # 최종 정밀 포즈 추출
-            #     refined_pos = icp_matrix[:3, 3]
-            #     refined_quat = R.from_matrix(icp_matrix[:3, :3]).as_quat()
-            # except Exception as e:
-            #     rospy.logwarn(f"ICP 정밀 보정 실패: {e}. PCA 결과로 대체합니다.")
-            #     refined_pos = w_centroid
-            #     refined_quat = R.from_euler('z', initial_angle).as_quat()
+            cube_pos = [w_centroid[0], w_centroid[1], w_centroid[2]]
+            cube_quat = R.from_euler('z', angle).as_quat()
 
             # Grasp Processing
             final_grasp_world = None
@@ -385,8 +333,8 @@ class SamCubeDetector:
                 grasp_score = grasp_data[seg_id]['score']
                 
                 # Transform Cam -> World
-                t = transform_grasp.transform.translation
-                q = transform_grasp.transform.rotation
+                t = transform.transform.translation
+                q = transform.transform.rotation
                 T_world_cam = self.quaternion_matrix([q.x, q.y, q.z, q.w])
                 T_world_cam[0:3, 3] = [t.x, t.y, t.z]
                 
@@ -398,70 +346,27 @@ class SamCubeDetector:
                 grasp_markers.markers.append(grasp_marker)
                 m_text = self.create_text_marker(T_world_grasp, seg_id, grasp_score, header)
                 grasp_markers.markers.append(m_text)
-                
-            cube = Cube(index, refined_pos.tolist(), refined_quat.tolist(), scores[index], [self.known_cube_size]*3, 
+
+            cube = Cube(index, cube_pos, cube_quat, scores[index], [self.known_cube_size]*3, 
                        grasp_pose=final_grasp_world, grasp_score=grasp_score)
             
             detected_cubes.append(cube)
-            self.update_planning_scene(index, refined_pos, refined_quat)
+            self.update_planning_scene(index, cube_pos, cube_quat)
             all_points_world.append(points_world)
+
         self.publish_centroid_point(detected_cubes, header.stamp)
         self.publish_mapped_point_cloud(all_points_world, header.stamp)
         self.grasp_vis_pub.publish(grasp_markers)
         
         return detected_cubes
-    
-    def refine_pose_with_icp(self, target_points, initial_trans):
-        """ICP를 통해 가상 모델을 실제 점군에 맞춤 (완전 메모리 격리 버전)"""
-        try:
-            # 1. Target(실제 점군) 물리적 복제
-            # NumPy를 거쳐 Python List로 변환하면 모든 메모리 플래그가 소멸됩니다.
-            target_list = np.array(target_points, dtype=np.float64).tolist()
-            tmp_target = o3d.geometry.PointCloud()
-            tmp_target.points = o3d.utility.Vector3dVector(target_list)
-            tmp_target.estimate_normals()
 
-            # 2. Source(가상 모델) 즉석 생성 
-            # 클래스 변수를 절대 쓰지 않고, 순수 좌표 리스트로부터 매번 새 PointCloud를 만듭니다.
-            s = self.known_cube_size / 2.0
-            grid = np.linspace(-s, s, 10)
-            src_pts = []
-            for i in grid:
-                for j in grid:
-                    src_pts.extend([[i, j, s], [i, j, -s], [i, s, j], [i, -s, j], [s, i, j], [-s, i, j]])
-            
-            tmp_source = o3d.geometry.PointCloud()
-            tmp_source.points = o3d.utility.Vector3dVector(src_pts)
-            tmp_source.estimate_normals()
-
-            # 3. ICP 실행
-            reg = o3d.pipelines.registration.registration_icp(
-                tmp_source, 
-                tmp_target, 
-                self.known_cube_size * 0.3, 
-                initial_trans,
-                o3d.pipelines.registration.TransformationEstimationPointToPoint()
-            )
-            
-            # 결과값만 복사해서 반환하고, 생성된 tmp 객체들은 함수 종료와 함께 소멸됨
-            return np.array(reg.transformation, copy=True)
-            
-        except Exception as e:
-            rospy.logwarn(f"ICP 연산 시도 중 에러: {e}")
-            raise e
-
-    def transform_points_to_world(self, points, transform_cam):
-        t = transform_cam.transform.translation
-        q = transform_cam.transform.rotation
-        
-        R_wc = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
-        t_wc = np.array([t.x, t.y, t.z])
-
-        # Apply transform: p_world = R * p_cam + t
-        points_world = (R_wc @ points.T).T + t_wc
-
-        return points_world
-    
+    def transform_points_to_world(self, points, transform):
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        matrix = self.quaternion_matrix([q.x, q.y, q.z, q.w])
+        matrix[0:3, 3] = [t.x, t.y, t.z]
+        points_homo = np.hstack([points, np.ones((points.shape[0], 1))])
+        return np.dot(matrix, points_homo.T).T[:, :3]
 
     def quaternion_matrix(self, quaternion):
         mat = np.eye(4)

@@ -76,7 +76,7 @@ class SamCubeDetector:
         self.prompt = rospy.get_param('~prompt', 'small cube')
         # self.world_frame = rospy.get_param('~world_frame', 'panda_link0')
         self.world_frame = rospy.get_param('~world_frame', 'world')
-        # self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
+        self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
         self.known_cube_size = rospy.get_param('~known_cube_size', 0.045)  # 4.5cm
         
         self.table_x_min, self.table_x_max = 0.3, 1.0
@@ -330,6 +330,7 @@ class SamCubeDetector:
             points_world = self.transform_points_to_world(points_cam, transform_cam)
             w_centroid = np.mean(points_world, axis=0)
             
+            rospy.loginfo(f"spy1-----------------------------------------------------")
             if not (self.table_x_min < w_centroid[0] < self.table_x_max and 
                     self.table_y_min < w_centroid[1] < self.table_y_max):
                 continue

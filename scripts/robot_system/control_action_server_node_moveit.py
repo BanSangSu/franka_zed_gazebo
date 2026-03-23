@@ -93,11 +93,13 @@ class ControlActionServer:
             return
         
         try:
+            franka_gripper_grasp = rospy.resolve_name('franka_gripper/grasp')
+            franka_gripper_move = rospy.resolve_name('franka_gripper/move')
             self.grasp_client = actionlib.SimpleActionClient(
-                '/franka_gripper/grasp', GraspAction
+                franka_gripper_grasp, GraspAction
             )
             self.move_client = actionlib.SimpleActionClient(
-                '/franka_gripper/move', MoveAction
+                franka_gripper_move, MoveAction
             )
             
             if self.move_client.wait_for_server(timeout=rospy.Duration(2.0)):
@@ -233,9 +235,16 @@ class ControlActionServer:
             else:
                 target_width = goal.width if goal.width > 0 else 0.0
                 grasp_force = goal.force if goal.force > 0 else self.default_grasp_force
-                success, message, final_width = self._grasp(
-                    target_width, grasp_force, feedback
-                )
+                if goal.mode == "picking":
+                    success, message, final_width = self._grasp(
+                        target_width, grasp_force, feedback
+                    )
+                else:
+                    success, message, final_width = self._grasp(
+                        0.0, grasp_force, feedback
+                    )
+
+                    
             
             result.success = success
             result.message = message
@@ -341,12 +350,16 @@ class ControlActionServer:
         else:
             width_error = abs(final_width - target_width)
             
-            if final_width < 0.005:
-                return False, f"No object (width={final_width:.4f}m)", final_width
-            elif width_error <= 0.02:
-                return True, f"Acceptable (width={final_width:.4f}m)", final_width
+            # if final_width < 0.005:
+            #     return False, f"No object (width={final_width:.4f}m)", final_width
+            # elif width_error <= 0.02:
+            #     return True, f"Acceptable (width={final_width:.4f}m)", final_width
+            # else:
+            #     return False, f"Mismatch: {final_width:.4f}m vs {target_width:.4f}m", final_width
+            if final_width > 0.079: # Assuming 0.08 is max width
+                return False, "Gripper remained open - likely missed", final_width
             else:
-                return False, f"Mismatch: {final_width:.4f}m vs {target_width:.4f}m", final_width
+                return True, f"Grasped (force={force}N, width={final_width:.4f}m)", final_width
     
     def _grasp_position_control(self, target_width, feedback):
         """

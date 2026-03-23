@@ -1,0 +1,25 @@
+<launch>
+
+  <!-- Start perception service -->
+  <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node.py" output="screen">
+    <rosparam command="load" file="$(find franka_zed_gazebo)/config/perception_params.yaml"/>
+  </node>
+
+  <!-- Start planning action server -->
+  <node name="planning_action_server" pkg="franka_zed_gazebo" type="planning_action_server_node_moveit_w_cartesian.py" output="screen">
+    <param name="planning_group" value="panda_manipulator"/>
+  </node>
+
+  <!-- Start control action server (includes gripper action) -->
+  <node name="control_action_server" pkg="franka_zed_gazebo" type="control_action_server_node_moveit.py" output="screen">
+    <param name="planning_group" value="panda_manipulator"/>
+  </node>
+
+  
+  <!-- Start orchestrator -->
+  <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrate_node.py" output="screen"/>
+  
+  <!-- Behavior Tree Visualization -->
+  <node name="rqt_py_trees" pkg="rqt_py_trees" type="rqt_py_trees" output="screen"/>
+
+</launch>

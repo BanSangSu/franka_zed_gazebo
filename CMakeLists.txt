@@ -201,6 +201,9 @@ include_directories(
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
 
+add_compile_options(-std=c++17)
+
+find_package(Franka REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
@@ -210,6 +213,13 @@ find_package(catkin REQUIRED COMPONENTS
   moveit_msgs
   actionlib_msgs
   geometry_msgs
+
+  controller_interface
+  hardware_interface
+  franka_hw
+  realtime_tools
+  pluginlib
+  sensor_msgs
 )
 
 add_action_files(
@@ -244,3 +254,21 @@ include_directories(
 )
 
 
+add_library(franka_zed_gazebo
+  src/joint_impedance_command_controller.cpp
+)
+
+target_include_directories(franka_zed_gazebo PUBLIC
+  include
+  ${catkin_INCLUDE_DIRS}
+  /usr/local/include
+)
+
+target_link_libraries(franka_zed_gazebo
+  ${catkin_LIBRARIES}
+  Franka::Franka
+)
+
+install(FILES franka_zed_gazebo_plugins.xml
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)

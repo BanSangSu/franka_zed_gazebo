@@ -51,6 +51,7 @@ class GraspServiceNode:
         self.local_regions = rospy.get_param('~local_regions', True)
         self.filter_grasps = rospy.get_param('~filter_grasps', True)
         self.use_cam_boxes = rospy.get_param('~use_cam_boxes', True)
+        self.OTV = True
 
         # --- Load Model ---
         rospy.loginfo("Loading Contact Graspnet Model...")
@@ -128,9 +129,11 @@ class GraspServiceNode:
         if len(pc_segments) == 0:
             return {}
 
-        # show_image(rgb, segmap)
-        # visualize_grasps(pc_full, pred_grasps_cam, scores, plot_opencv_cam=True, pc_colors=pc_colors)        
-        return pred_grasps_cam, scores, contact_pts
+        if self.OTV:
+            show_image(rgb, segmap)
+            visualize_grasps(pc_full, pred_grasps_cam, scores, plot_opencv_cam=True, pc_colors=pc_colors)        
+            self.OTV = False
+        return pred_grasps_cam, scores, contact_pts, pc_colors
 
     def process_ros_data(self, rgb_msg, depth_msg, segmap, pc_msg, k_msg):
         # Convert ROS to Numpy
@@ -148,11 +151,14 @@ class GraspServiceNode:
             points = read_points(pc_msg, field_names=("x", "y", "z"), skip_nans=True)
             pc_full = np.array(list(points))   # or convert to NumPy if you prefer
             # Run Inference
-            grasps_dict, scores_dict, contact_pts_dict = self.predict(rgb, depth, segmap, pc_full, cam_K)
+            grasps_dict, scores_dict, contact_pts_dict, pc_colors = self.predict(rgb, depth, segmap, pc_full, cam_K)
 
             # Format results for ROS (This would go into your Service Response)
             # Returning a simplified structure for demonstration
             results = []
+            
+            best_grasps_for_viz = {}  # for visualization, not part of the service response
+            best_scores_for_viz = {}
             for obj_id, grasp_matrices in grasps_dict.items():
                 obj_scores = scores_dict.get(obj_id, None)
 
@@ -167,14 +173,35 @@ class GraspServiceNode:
                 best_idx = int(np.argmax(obj_scores))
 
                 best_grasp = grasp_matrices[best_idx]
+                best_score = obj_scores[best_idx]
                 best_contact_pts = contact_pts_dict[obj_id][best_idx]
+
+                best_grasps_for_viz[obj_id] = [best_grasp]
+                best_scores_for_viz[obj_id] = [best_score]
 
                 results.append({
                     "id": int(obj_id),
                     "pose": best_grasp,
-                    "score": float(obj_scores[best_idx]),
+                    "score": float(best_score),
                     "contact_point": best_contact_pts,
                 })
+
+            
+            # if best_grasps_for_viz:
+            #     print("=== VISUALIZING BEST GRASPS (Custom Open3D) ===")
+            #     viz_pc_colors = np.zeros((pc_full.shape[0], 3)) + 0.7 
+
+            #     # 1. RGB + Segmap (matplotlib)
+            #     show_image(rgb, segmap)
+                
+            #     # 2. 3D Best Grasps (네 Open3D 버전)
+            #     visualize_grasps(
+            #         full_pc=pc_full,
+            #         pred_grasps_cam=best_grasps_for_viz,  # {obj_id: [best_grasp]}
+            #         scores=best_scores_for_viz,           # {obj_id: [best_score]}
+            #         plot_opencv_cam=True,
+            #         pc_colors= viz_pc_colors
+            #     )
                  
             return results
 

@@ -25,6 +25,64 @@ from franka_zed_gazebo.msg import (
 
 
 
+# def switch_to_impedance():
+#     rospy.wait_for_service('/controller_manager/switch_controller')
+#     switcher = rospy.ServiceProxy('/controller_manager/switch_controller', SwitchController)
+#     # stop position, start impedance
+#     switcher(start_controllers=['joint_impedance_controller'], 
+#              stop_controllers=['position_joint_trajectory_controller'],
+#              strictness=2)
+    
+# class SwitchController(py_trees.behaviour.Behaviour):
+#     """
+#     Modes: 'IMPEDANCE' or 'EFFORT'
+#     """
+#     def __init__(self, mode):
+#         super(SwitchController, self).__init__(f"SwitchTo{mode}")
+#         self.mode = mode.upper()
+#         # self.srv_name = '/group_rheinrobot/controller_manager/switch_controller' # for ROS_NAMESPACE
+#         self.srv_name = '/controller_manager/switch_controller'
+#         # We don't initialize the proxy here to avoid crashes if the service isn't up yet
+#         self.srv = None
+
+#     def setup(self, timeout):
+#         """Standard py_trees setup to wait for ROS services"""
+#         try:
+#             rospy.wait_for_service(self.srv_name, timeout=timeout)
+#             # CRITICAL: Use the Parent Service Class, NOT the Request class
+#             self.srv = rospy.ServiceProxy(
+#                 self.srv_name, 
+#                 controller_manager_msgs.srv.SwitchController
+#             )
+#             return True
+#         except rospy.ROSException as e:
+#             rospy.logerr(f"[{self.name}] Service not found: {e}")
+#             return False
+
+#     def update(self):
+#         # Create the request object using the Request class
+#         req = controller_manager_msgs.srv.SwitchControllerRequest()
+        
+#         if self.mode == "IMPEDANCE":
+#             req.start_controllers = ['cartesian_impedance_example_controller']
+#             req.stop_controllers = ['position_joint_trajectory_controller']
+#         else:
+#             req.start_controllers = ['position_joint_trajectory_controller']
+#             req.stop_controllers = ['cartesian_impedance_example_controller']
+        
+#         # Use the constant from the Request class
+#         req.strictness = controller_manager_msgs.srv.SwitchControllerRequest.STRICT
+        
+#         try:
+#             # The proxy (self.srv) was created using the Service Definition
+#             res = self.srv(req)
+#             return py_trees.common.Status.SUCCESS if res.ok else py_trees.common.Status.FAILURE
+#         except Exception as e:
+#             rospy.logerr(f"[{self.name}] Switch failed: {e}")
+#             return py_trees.common.Status.FAILURE
+
+
+
 
 ###############################################################################
 # CONFIGURATION
@@ -33,19 +91,20 @@ from franka_zed_gazebo.msg import (
 
 class Config:
    """Robot configuration"""
-   BASE_X = 0.5
+
+   BASE_X = 0.5  ##what is its use?
    BASE_Y = 0.0
-   BASE_Z = 0.0225
+   BASE_Z = 0.0025 ##how accurate is this?
    CUBE_SIZE = 0.045
   
-   SAFE_HEIGHT = 0.15
-   GRASP_HEIGHT = 0.01
-   PLACE_HEIGHT = 0.01
+   SAFE_HEIGHT = 0.2
+   GRASP_HEIGHT = -0.01
+   PLACE_HEIGHT = 0.025
   
    GRIPPER_OPEN_WIDTH = 0.08
    GRIPPER_FORCE = 30.0
    GRIPPER_WIDTH_MARGIN = 0.005
-   MIN_GRIPPER_WIDTH = 0.01
+   MIN_GRIPPER_WIDTH = 0.01 ##is it possible to tel, is it making a difference
   
    GRASP_QUAT = [1.0, 0.0, 0.0, 0.0]
   
@@ -53,7 +112,7 @@ class Config:
    MAX_PICK_RETRIES = 2
    MAX_PLACE_RETRIES = 3
 
-
+   
 
 
 class Pattern(Enum):
@@ -97,7 +156,7 @@ class Retry(py_trees.decorators.Decorator):
        Retry logic:
        - If child succeeds: return SUCCESS
        - If child fails: retry if under limit, else return FAILURE
-       - If child running: return RUNNING
+       - If child running: return RUNNING  ##How does it change to either success or faliure
        """
        child_status = self.decorated.status
       
@@ -143,8 +202,9 @@ class BB:
    TRAJECTORY = "traj"
    COLLISION = "collision"
    GOAL_TO_CUBE = "goal_to_cube"
+   PLACED_IDS = "placed_cubes"
 
-
+##maybe can add the gripper distance to check if it is holding an object
 
 
 def init_blackboard():
@@ -157,6 +217,7 @@ def init_blackboard():
    bb.set(BB.TRAJECTORY, None)
    bb.set(BB.COLLISION, "")
    bb.set(BB.GOAL_TO_CUBE, {})
+   bb.set(BB.PLACED_IDS, {})
    return bb
 
 
@@ -226,7 +287,7 @@ def generate_stack(n):
        goals.append(make_pose(
            Config.BASE_X,
            Config.BASE_Y,
-           Config.BASE_Z + i * Config.CUBE_SIZE
+           Config.BASE_Z + i * Config.CUBE_SIZE ##is this good enough check
        ))
    return goals
 
@@ -237,7 +298,7 @@ def generate_pyramid():
    """3-2-1 pyramid"""
    goals = []
    x, y, z = Config.BASE_X, Config.BASE_Y, Config.BASE_Z
-   cs = Config.CUBE_SIZE
+   cs = Config.CUBE_SIZE ##should there be a slight offset
   
    for yo in [-cs, 0, cs]:
        goals.append(make_pose(x, y + yo, z))
@@ -277,6 +338,8 @@ class Perceive(py_trees.behaviour.Behaviour):
        super(Perceive, self).__init__("Perceive")
        self.bb = py_trees.blackboard.Blackboard()
        self.proxy = None
+       self.scene = moveit_commander.PlanningSceneInterface()
+
   
    def setup(self, timeout):
        try:
@@ -293,15 +356,35 @@ class Perceive(py_trees.behaviour.Behaviour):
            if not resp.success:
                return py_trees.common.Status.FAILURE
           
+           placed_dict = self.bb.get(BB.PLACED_IDS) or {}
+           placed_positions = list(placed_dict.values())
+            
+            # NOt sure how good this threshold is
+           THRESHOLD = 0.05 
+
            cubes = []
            for i in range(resp.num_cubes):
-               cubes.append({
-                   'id': i,
-                   'pose': resp.cube_poses.poses[i],
-                   'dimensions': resp.dimensions[i],
-                   'label': resp.labels[i] if i < len(resp.labels) else "cube"
-               })
-          
+            new_pos = resp.cube_poses.poses[i].position
+            
+            is_duplicate = False
+            for p_pos in placed_positions:
+                dist = np.sqrt((new_pos.x - p_pos.x)**2 + 
+                                (new_pos.y - p_pos.y)**2 + 
+                                (new_pos.z - p_pos.z)**2)
+                if dist < THRESHOLD:
+                    is_duplicate = True
+                    self.scene.remove_world_object(f"cube_{i}")
+                    break
+            
+            if not is_duplicate:
+                cubes.append({
+                    'id': i,
+                    'pose': resp.cube_poses.poses[i],
+                    'dimensions': resp.dimensions[i]
+                })
+            else:
+                rospy.loginfo(f"Filtering out perceived cube at {new_pos.x, new_pos.y} - Space already occupied by a placed cube.")
+
            self.bb.set(BB.CUBES, cubes)
            rospy.loginfo(f"[{self.name}] Found {len(cubes)} cubes")
            return py_trees.common.Status.SUCCESS
@@ -379,13 +462,14 @@ class SelectCube(py_trees.behaviour.Behaviour):
        cubes = self.bb.get(BB.CUBES)
        done = self.bb.get(BB.COMPLETED)
       
-       available = [c for c in cubes if c['id'] not in done]
+    #    available = [c for c in cubes if c['id'] not in done]
+       available = cubes
       
        if not available:
            rospy.logwarn(f"[{self.name}] No cubes available")
            return py_trees.common.Status.FAILURE
       
-       best = max(available, key=lambda c: c['pose'].position.x)
+       best = max(available, key=lambda c: c['pose'].position.x) ##unsure is this is a good heuristic, depending on where we thing x is zero it might also help in the solving the grabbing the aame cube twice
        self.bb.set(BB.SELECTED_CUBE, best)
       
        rospy.loginfo(f"[{self.name}] Selected cube {best['id']}")
@@ -428,7 +512,8 @@ class MarkComplete(py_trees.behaviour.Behaviour):
    def update(self):
        idx = self.bb.get(BB.GOAL_IDX)
        cube = self.bb.get(BB.SELECTED_CUBE)
-      
+       target_pose = self.bb.get(BB.TARGET_POSE)
+       placed_ids = self.bb.get(BB.PLACED_IDS) or {}
        # Update completion status
        done = self.bb.get(BB.COMPLETED)
        done.add(idx)
@@ -438,8 +523,12 @@ class MarkComplete(py_trees.behaviour.Behaviour):
        mapping = self.bb.get(BB.GOAL_TO_CUBE)
        mapping[idx] = cube['id']
        self.bb.set(BB.GOAL_TO_CUBE, mapping)
+
+       ##added for placed logic
+
+       placed_ids[idx] = target_pose.position 
+       self.bb.set(BB.PLACED_IDS, placed_ids)
       
-       rospy.loginfo(f"[{self.name}] Goal {idx} done (Cube {cube['id']})")
        return py_trees.common.Status.SUCCESS
 
 
@@ -462,7 +551,7 @@ class CheckAttached(py_trees.behaviour.Behaviour):
        # Returns SUCCESS if objects are attached, FAILURE otherwise
        attached = self.scene.get_attached_objects()
        if attached:
-           rospy.loginfo(f"[{self.name}] Found attached objects: {list(attached.keys())}")
+           ##rospy.loginfo(f"[{self.name}] Found attached objects: {list(attached.keys())}")
            return py_trees.common.Status.SUCCESS
        return py_trees.common.Status.FAILURE
 
@@ -603,18 +692,22 @@ class PlanHome(ActionClient):
 
 
 
-
+#added mode for normal or cartesian
 class PlanToPose(ActionClient):
-   def __init__(self, name, source, offset, collision=False):
+   def __init__(self, name, source, offset, collision=False, mode=""):
        super(PlanToPose, self).__init__(name, "/planning_action", PlanningActionAction)
        self.source = source
        self.offset = offset
        self.collision = collision
+       self.mode = mode
   
    def make_goal(self):
        src = self.bb.get(self.source)
+       placed_obj = self.bb.get(BB.PLACED_IDS)
+       idx = self.bb.get(BB.GOAL_IDX)
+       mapping = self.bb.get(BB.GOAL_TO_CUBE)
        g = PlanningActionGoal()
-       g.action = ""
+       g.action = self.mode
       
        if self.source == BB.SELECTED_CUBE:
            base = src['pose']
@@ -623,9 +716,14 @@ class PlanToPose(ActionClient):
            base = src
            if self.collision:
                g.allowed_collision_object = self.bb.get(BB.COLLISION)
+               if idx > 0 and (idx - 1) in mapping:
+                   rospy.loginfo(f"LIST OF COLLSIONS----------: [{self.bb.get(BB.COLLISION)}]")
+                   rospy.loginfo(f"LIST OF COLLSIONS:ARE THESE THE SAME??----------: [{placed_obj}]")
+                   rospy.loginfo(f"THE ALLOWED COLLISION IS---------:[{placed_obj[idx-1]}]") 
       
        target = offset_pose(base, *self.offset, quat=Config.GRASP_QUAT)
        g.target_pose = target
+       rospy.loginfo(f"THE TARGET IS:(THE OFFSET SHOULD BE)---------:[{target}]")
        return g
   
    def on_success(self, result):
@@ -683,6 +781,7 @@ class Execute(ActionClient):
    def make_goal(self):
        traj = self.bb.get(BB.TRAJECTORY)
        if traj is None:
+           rospy.logwarn("No trajectory sadly.......")
            return None
        g = ControlActionGoal()
        g.trajectory = traj
@@ -741,9 +840,9 @@ def build_pick_sequence():
    """Build pick subtree"""
    pick = py_trees.composites.Sequence("Pick")
    pick.add_child(GripperOpen())
-   pick.add_child(PlanToPose("Approach", BB.SELECTED_CUBE, (0, 0, Config.SAFE_HEIGHT)))
+   pick.add_child(PlanToPose("Approach", BB.SELECTED_CUBE, (0, 0, Config.SAFE_HEIGHT))) ##can also add the rotation of the cube that will be picked
    pick.add_child(Execute())
-   pick.add_child(PlanToPose("Descend", BB.SELECTED_CUBE, (0, 0, Config.GRASP_HEIGHT)))
+   pick.add_child(PlanToPose("Descend", BB.SELECTED_CUBE, (0, 0, Config.GRASP_HEIGHT), mode="BEAST"))
    pick.add_child(Execute())
    pick.add_child(GripperClose())
    pick.add_child(Attach())
@@ -776,14 +875,14 @@ def build_safe_drop_sequence():
 
 
 
-
+ ###when placed the cube, there seems to be a slight increase in the z-axis suhc that it seems to be lsight floating in the air.
 def build_place_sequence():
    """Build place subtree"""
    place = py_trees.composites.Sequence("Place")
    place.add_child(SetCollision())
    place.add_child(PlanToPose("ApproachGoal", BB.TARGET_POSE, (0, 0, Config.SAFE_HEIGHT), True))
    place.add_child(Execute())
-   place.add_child(PlanToPose("DescendGoal", BB.TARGET_POSE, (0, 0, Config.PLACE_HEIGHT), True))
+   place.add_child(PlanToPose("DescendGoal", BB.TARGET_POSE, (0, 0, Config.PLACE_HEIGHT), True, mode="BEAST"))
    place.add_child(Execute())
    place.add_child(GripperOpen())
    place.add_child(Detach())
@@ -890,7 +989,6 @@ def main():
 
 if __name__ == '__main__':
    main()
-
 
 
 

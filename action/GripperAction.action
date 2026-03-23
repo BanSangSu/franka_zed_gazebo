@@ -4,6 +4,7 @@
 bool open              # True: open gripper, False: close/grasp
 float32 width          # Target width between fingers (meters), 0 for full close
 float32 force          # Grasping force (Newtons), ignored if open=true
+string mode            # Grasping mode, picking oder flipping
 
 ---
 

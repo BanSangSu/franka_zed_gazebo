@@ -204,8 +204,10 @@ class MultiDetectorSAM:
         # Join it with the checkpoint filename
         # current_dir = os.path.dirname(os.path.abspath(__file__))
         # sam_checkpoint = os.path.join(current_dir, "sam_vit_b_01ec64.pth")
-        running_path = os.getcwd()
-        sam_checkpoint = os.path.join(running_path, "sam_vit_b_01ec64.pth")
+        # running_path = os.getcwd()
+        # sam_checkpoint = os.path.join(running_path, "sam_vit_b_01ec64.pth")
+
+        sam_checkpoint = os.path.join("/opt/ros_ws", "sam_vit_b_01ec64.pth")
         if SAM_AVAILABLE and self.use_sam and sam_checkpoint:
             self.device = self.detector.device
             if os.path.exists(sam_checkpoint):

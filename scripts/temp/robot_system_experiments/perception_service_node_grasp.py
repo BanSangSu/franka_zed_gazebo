@@ -73,7 +73,9 @@ class SamCubeDetector:
         self.sam_checkpoint = rospy.get_param('~sam_checkpoint', 'sam_vit_b_01ec64.pth')
         self.sam_model_type = rospy.get_param('~sam_model_type', 'vit_b')
         # self.prompt = rospy.get_param('~prompt', 'carrot')
-        self.prompt = rospy.get_param('~prompt', 'small cube')
+        # self.prompt = rospy.get_param('~prompt', 'small cubes. banana. tomato. cup.')
+        self.prompt = rospy.get_param('~prompt', 'small cubes. banana.')
+        # self.prompt = rospy.get_param('~prompt', 'small cubes.')
         # self.world_frame = rospy.get_param('~world_frame', 'panda_link0')
         self.world_frame = rospy.get_param('~world_frame', 'world')
         # self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
@@ -217,12 +219,35 @@ class SamCubeDetector:
             response.cube_poses = PoseArray()
             response.cube_poses.header.frame_id = self.world_frame
             response.cube_poses.header.stamp = rospy.Time.now()
+
+            response.grasp_poses = PoseArray()
+            response.grasp_poses.header.frame_id = self.world_frame
+            response.grasp_poses.header.stamp = response.cube_poses.header.stamp
             
             for cube in detected_cubes:
                 p = Pose()
                 p.position.x, p.position.y, p.position.z = cube.position
                 p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = cube.orientation
                 response.cube_poses.poses.append(p)
+
+                # Grasp Pose
+                gp = Pose()
+                if cube.grasp_pose is not None:
+                    # Extract Translation (from the 4th column of the 4x4 matrix)
+                    gp.position.x = cube.grasp_pose[0, 3]
+                    gp.position.y = cube.grasp_pose[1, 3]
+                    gp.position.z = cube.grasp_pose[2, 3]
+
+                    # Extract Rotation Matrix and convert to Quaternion
+                    rot_matrix = cube.grasp_pose[:3, :3]
+                    q = R.from_matrix(rot_matrix).as_quat()
+                    gp.orientation.x, gp.orientation.y, gp.orientation.z, gp.orientation.w = q
+                else:
+                    # Fallback to object pose if no grasp was generated
+                    gp = p 
+
+                response.grasp_poses.poses.append(gp)
+
                 
                 response.confidences.append(cube.confidence)
                 
@@ -389,10 +414,11 @@ class SamCubeDetector:
                 q = transform_grasp.transform.rotation
                 T_world_cam = self.quaternion_matrix([q.x, q.y, q.z, q.w])
                 T_world_cam[0:3, 3] = [t.x, t.y, t.z]
+
                 
                 T_world_grasp = np.dot(T_world_cam, g_pose_cam)
-                final_grasp_world = T_world_grasp
 
+                final_grasp_world = T_world_grasp
                 # Visualization Markers
                 grasp_marker = self.create_gripper_marker(T_world_grasp, seg_id, header)
                 grasp_markers.markers.append(grasp_marker)
@@ -512,7 +538,7 @@ class SamCubeDetector:
         rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
         marker.color.r, marker.color.g, marker.color.b = rgb
         marker.color.a = 1.0 
-        w = 0.04  
+        w = 0.04 
         d = 0.06  
         local_pts = [
             [-w, 0, 0], [w, 0, 0],   

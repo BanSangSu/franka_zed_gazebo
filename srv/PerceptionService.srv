@@ -6,6 +6,7 @@ bool success
 string message
 int32 num_cubes
 geometry_msgs/PoseArray cube_poses
+geometry_msgs/PoseArray grasp_poses
 float32[] confidences
 geometry_msgs/Vector3[] dimensions
 string[] labels

@@ -76,10 +76,12 @@ class PlanningActionServer:
        self.touch_links = [self.ee_link, "panda_leftfinger", "panda_rightfinger", "panda_hand"]
       
        # Service proxies for planning scene manipulation
-       rospy.wait_for_service('/get_planning_scene', timeout=10.0)
-       rospy.wait_for_service('/apply_planning_scene', timeout=10.0)
-       self.get_scene_srv = rospy.ServiceProxy('/get_planning_scene', GetPlanningScene)
-       self.apply_scene_srv = rospy.ServiceProxy('/apply_planning_scene', ApplyPlanningScene)
+       get_planning_scene= rospy.resolve_name('get_planning_scene')
+       apply_planning_scene = rospy.resolve_name('apply_planning_scene')
+       rospy.wait_for_service(get_planning_scene, timeout=10.0)
+       rospy.wait_for_service(apply_planning_scene, timeout=10.0)
+       self.get_scene_srv = rospy.ServiceProxy(get_planning_scene, GetPlanningScene)
+       self.apply_scene_srv = rospy.ServiceProxy(apply_planning_scene, ApplyPlanningScene)
       
        # Create action server with preemption support
        self.server = actionlib.SimpleActionServer(
@@ -156,12 +158,12 @@ class PlanningActionServer:
        obj = self.get_object_from_scene(goal.object_name)
        if obj is None:
            rospy.logwarn(f"Cannot find {goal.object_name} in scene, attempting attach anyway")
-           size = (0.05, 0.05, 0.05)  # Default size
+           size = (0.045, 0.045, 0.045)  # Default size 
        else:
            if obj.primitives and len(obj.primitives) > 0:
                size = tuple(obj.primitives[0].dimensions)
            else:
-               size = (0.05, 0.05, 0.05)
+               size = (0.045, 0.045, 0.045) ##check if this is causing any problmes
                rospy.logwarn(f"No primitive shape for {goal.object_name}, using default size")
       
        # Store metadata
@@ -170,7 +172,7 @@ class PlanningActionServer:
            'size': size,
            'attach_pose': current_pose,
            'attach_time': rospy.Time.now()
-       }
+       } 
       
        if not self.publish_feedback(0.5, f"Attaching {goal.object_name}"):
            return None
@@ -235,7 +237,7 @@ class PlanningActionServer:
        # Retrieve stored metadata
        if target_name not in self.attached_objects:
            rospy.logwarn(f"No metadata for {target_name}, using defaults")
-           size = (0.05, 0.05, 0.05)
+           size = (0.045, 0.045, 0.045)
        else:
            metadata = self.attached_objects[target_name]
            size = metadata['size']
@@ -249,10 +251,10 @@ class PlanningActionServer:
            return None
       
        # Generate new name to prevent perception overwrite
-       new_name = target_name.replace("cube_", "placed_cube_")
+       new_name = target_name.replace("cube_", "placed_cube_") ##check to see if the names are changing and that when doing the perception node it doers not overifde it
       
        # Add back to world scene at current location
-       self.scene.add_box(new_name, current_pose, size)
+       self.scene.add_box(new_name, current_pose, size) ##how accut=rate is this location?
        rospy.sleep(0.3)
       
        # Remove old world object if name changed
@@ -273,7 +275,7 @@ class PlanningActionServer:
        return result
   
   
-   def handle_home(self, goal):
+   def handle_home(self, goal): ##is it goal necessary?
        """Move to home/ready position"""
        result = PlanningActionResult()
       
@@ -320,40 +322,85 @@ class PlanningActionServer:
        return result
   
   
-   def handle_motion_planning(self, goal):
+   def handle_motion_planning(self, goal): ##handles the planning part put not the executing part
        """Handle motion planning with optional collision allowances"""
        result = PlanningActionResult()
+       type = True
+       rospy.loginfo(f"THE GOAL IS:-------'{goal.action}'")
+       if goal.action == "BEAST":
+           type = False
       
        if not self.publish_feedback(0.1, "Validating target pose"):
            return None
       
        with self.planning_lock:
-           # Set pose target
-           self.move_group.set_pose_target(goal.target_pose, self.ee_link)
-          
-           # Handle collision allowances for pre-grasp approaches
-           if goal.allowed_collision_object:
-               rospy.loginfo(f"Allowing collision with '{goal.allowed_collision_object}' during planning")
-               self.move_group.set_support_surface_name(goal.allowed_collision_object)
+           if type:
+                # NOrmal PLanning
+            self.move_group.set_pose_target(goal.target_pose, self.ee_link)
+            
+            # Handle collision allowances for pre-grasp approaches
+            if goal.allowed_collision_object:
+                rospy.loginfo(f"Allowing collision with '{goal.allowed_collision_object}' during planning")
+                self.move_group.set_support_surface_name(goal.allowed_collision_object) #in what situation is this usefull?
+            else:
+                self.move_group.set_support_surface_name("")  # Clear
+            
+            rospy.loginfo(f"Planning to target: [{goal.target_pose.position.x:.3f}, "
+                            f"{goal.target_pose.position.y:.3f}, {goal.target_pose.position.z:.3f}]")
+            
+            if not self.publish_feedback(0.4, "Computing motion plan"):
+                self.move_group.clear_pose_targets()
+                return None
+            
+            # Plan with timeout monitoring
+            plan = self.move_group.plan()
+            
+            if isinstance(plan, tuple):
+                success, trajectory, planning_time, error_code = plan
+                rospy.loginfo(f"Planning completed in {planning_time:.2f}s")
+            else:
+                trajectory = plan  ##why are you always outputting something
+                success = len(trajectory.joint_trajectory.points) > 0
+
            else:
-               self.move_group.set_support_surface_name("")  # Clear
-          
-           rospy.loginfo(f"Planning to target: [{goal.target_pose.position.x:.3f}, "
-                        f"{goal.target_pose.position.y:.3f}, {goal.target_pose.position.z:.3f}]")
-          
-           if not self.publish_feedback(0.4, "Computing motion plan"):
-               self.move_group.clear_pose_targets()
-               return None
-          
-           # Plan with timeout monitoring
-           plan = self.move_group.plan()
-          
-           if isinstance(plan, tuple):
-               success, trajectory, planning_time, error_code = plan
-               rospy.loginfo(f"Planning completed in {planning_time:.2f}s")
-           else:
-               trajectory = plan
-               success = len(trajectory.joint_trajectory.points) > 0
+                # Cartesian planinig
+            waypoints = [goal.target_pose]
+            
+            if goal.allowed_collision_object:
+                rospy.loginfo(f"Allowing collision with '{goal.allowed_collision_object}' during planning")
+                self.move_group.set_support_surface_name(goal.allowed_collision_object) #in what situation is this usefull?
+            else:
+                self.move_group.set_support_surface_name("")  # Clear
+            
+            rospy.loginfo(f"Planning to target: [{goal.target_pose.position.x:.3f}, "
+                            f"{goal.target_pose.position.y:.3f}, {goal.target_pose.position.z:.3f}]")
+            
+            if not self.publish_feedback(0.4, "Computing motion plan"):
+                self.move_group.clear_pose_targets()
+                return None
+            
+            # Plan with timeout monitoring
+            (plan, fraction) = self.move_group.compute_cartesian_path(
+                waypoints, 0.005, True  
+            )
+            
+            if fraction > 0.0 :
+                rospy.logwarn(f"Cartesian path incomplete! Only computed {fraction*100:.1f}% "
+                              f"(likely collision or joint limit)")
+   #             success = False
+    #            trajectory = tuple
+     #       else:
+                current_state = self.robot.get_current_state()
+        
+                # Apply the "Slow Down" effect
+                plan = self.move_group.retime_trajectory(
+                    current_state, 
+                    plan, 
+                    velocity_scaling_factor=0.2,  
+                    acceleration_scaling_factor=0.1
+                )
+                success = True
+                trajectory = plan
           
            # Clear targets
            self.move_group.clear_pose_targets()
@@ -434,7 +481,6 @@ if __name__ == '__main__':
        rospy.logfatal(f"Failed to start Planning Action Server: {e}")
    finally:
        moveit_commander.roscpp_shutdown()
-
 
 
 

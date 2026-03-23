@@ -76,8 +76,8 @@ class SamCubeDetector:
         self.prompt = rospy.get_param('~prompt', 'small cube')
         # self.world_frame = rospy.get_param('~world_frame', 'panda_link0')
         self.world_frame = rospy.get_param('~world_frame', 'world')
-        # self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
-        self.known_cube_size = rospy.get_param('~known_cube_size', 0.045)  # 4.5cm
+        self.po_camera_frame = rospy.get_param('~po_camera_frame', 'zedr_base_link') # for poesidon robot
+        self.known_cube_size = 0.045 # 0.045
         
         self.table_x_min, self.table_x_max = 0.3, 1.0
         self.table_y_min, self.table_y_max = -0.4, 0.4
@@ -101,16 +101,16 @@ class SamCubeDetector:
             self.grasp_detector = GraspServiceNode(init_node=False)
 
         # # real zed
-        self.topic_image = rospy.get_param('~image_topic', "zedr/zed_node/left/image_rect_color")
-        self.topic_info = rospy.get_param('~camera_info_topic', "zedr/zed_node/left/camera_info")
-        self.topic_depth = rospy.get_param('~depth_topic', "zedr/zed_node/depth/depth_registered")
-        self.topic_cloud = rospy.get_param('~point_cloud_topic', "zedr/zed_node/point_cloud/cloud_registered")
+        # self.topic_image = rospy.get_param('~image_topic', "zedr/zed_node/left/image_rect_color")
+        # self.topic_info = rospy.get_param('~camera_info_topic', "zedr/zed_node/left/camera_info")
+        # self.topic_depth = rospy.get_param('~depth_topic', "zedr/zed_node/depth/depth_registered")
+        # self.topic_cloud = rospy.get_param('~point_cloud_topic', "zedr/zed_node/point_cloud/cloud_registered")
         
         # 4. ROS Topics Configuration (Strings only, subscriber creation happens on demand)
-        # self.topic_image = rospy.get_param('~image_topic', "static_zed2_camera/static_zed2/zed_node/left/image_rect_color")
-        # self.topic_info = rospy.get_param('~camera_info_topic', "static_zed2_camera/static_zed2/zed_node/left/camera_info")
-        # self.topic_depth = rospy.get_param('~depth_topic', "static_zed2_camera/static_zed2/zed_node/depth/depth_registered")
-        # self.topic_cloud = rospy.get_param('~point_cloud_topic', "static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered")
+        self.topic_image = rospy.get_param('~image_topic', "static_zed2_camera/static_zed2/zed_node/left/image_rect_color")
+        self.topic_info = rospy.get_param('~camera_info_topic', "static_zed2_camera/static_zed2/zed_node/left/camera_info")
+        self.topic_depth = rospy.get_param('~depth_topic', "static_zed2_camera/static_zed2/zed_node/depth/depth_registered")
+        self.topic_cloud = rospy.get_param('~point_cloud_topic', "static_zed2_camera/static_zed2/zed_node/point_cloud/cloud_registered")
         
         # TF
         self.tf_buffer = tf2_ros.Buffer()
@@ -141,7 +141,7 @@ class SamCubeDetector:
         table_pose.header.stamp = rospy.Time.now()
         table_pose.pose.position.x = 0.5  # Table center X (matches your table bounds 0.3-1.0)
         table_pose.pose.position.y = 0.0   # Table center Y (matches -0.4 to 0.4)
-        table_pose.pose.position.z = -0.25 # -0.3 # Half table height (5cm total height)
+        table_pose.pose.position.z = -0.3 # Half table height (5cm total height)
         table_pose.pose.orientation.w = 1.0
         
         # Table size: width=0.7m (X), length=0.8m (Y), height=0.05m (Z)
@@ -330,51 +330,34 @@ class SamCubeDetector:
             points_world = self.transform_points_to_world(points_cam, transform_cam)
             w_centroid = np.mean(points_world, axis=0)
             
+            rospy.loginfo(f"spy1-----------------------------------------------------")
             if not (self.table_x_min < w_centroid[0] < self.table_x_max and 
                     self.table_y_min < w_centroid[1] < self.table_y_max):
                 continue
 
-            # ICP Refinement (Using Identity Rotation as starting guess)
+            # PCA Orientation
+            pca_points = points_world - w_centroid
+            pca = PCA(n_components=2).fit(pca_points[:, :2])
+            initial_angle = np.arctan2(pca.components_[0, 1], pca.components_[0, 0])
+            
+            # ICP Refinement
             try:
-                # Initial transformation: Centroid position with no initial rotation
+                # 초기 변환 행렬 생성 (Centroid + PCA Angle)
+                init_rot = R.from_euler('z', initial_angle).as_matrix()
                 initial_trans = np.eye(4)
+                initial_trans[:3, :3] = init_rot
                 initial_trans[:3, 3] = w_centroid
 
-                # Perform ICP refinement
+                # ICP 수행
                 icp_matrix = self.refine_pose_with_icp(points_world, initial_trans)
                 
-                # Extract refined pose
+                # 최종 정밀 포즈 추출
                 refined_pos = icp_matrix[:3, 3]
                 refined_quat = R.from_matrix(icp_matrix[:3, :3]).as_quat()
-                
             except Exception as e:
-                rospy.logwarn(f"ICP 정밀 보정 실패: {e}. 기본 Centroid 결과로 대체합니다.")
+                rospy.logwarn(f"ICP 정밀 보정 실패: {e}. PCA 결과로 대체합니다.")
                 refined_pos = w_centroid
-                refined_quat = [0, 0, 0, 1] # Identity quaternion
-
-            # # PCA Orientation
-            # pca_points = points_world - w_centroid
-            # pca = PCA(n_components=2).fit(pca_points[:, :2])
-            # initial_angle = np.arctan2(pca.components_[0, 1], pca.components_[0, 0])
-            
-            # # ICP Refinement
-            # try:
-            #     # 초기 변환 행렬 생성 (Centroid + PCA Angle)
-            #     init_rot = R.from_euler('z', initial_angle).as_matrix()
-            #     initial_trans = np.eye(4)
-            #     initial_trans[:3, :3] = init_rot
-            #     initial_trans[:3, 3] = w_centroid
-
-            #     # ICP 수행
-            #     icp_matrix = self.refine_pose_with_icp(points_world, initial_trans)
-                
-            #     # 최종 정밀 포즈 추출
-            #     refined_pos = icp_matrix[:3, 3]
-            #     refined_quat = R.from_matrix(icp_matrix[:3, :3]).as_quat()
-            # except Exception as e:
-            #     rospy.logwarn(f"ICP 정밀 보정 실패: {e}. PCA 결과로 대체합니다.")
-            #     refined_pos = w_centroid
-            #     refined_quat = R.from_euler('z', initial_angle).as_quat()
+                refined_quat = R.from_euler('z', initial_angle).as_quat()
 
             # Grasp Processing
             final_grasp_world = None
@@ -438,7 +421,7 @@ class SamCubeDetector:
             reg = o3d.pipelines.registration.registration_icp(
                 tmp_source, 
                 tmp_target, 
-                self.known_cube_size * 0.3, 
+                self.known_cube_size * 0.5, 
                 initial_trans,
                 o3d.pipelines.registration.TransformationEstimationPointToPoint()
             )
