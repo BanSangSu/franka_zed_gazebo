@@ -16,8 +16,8 @@
   </node>
 
   
-  <!-- Start orchestrator -->
-  <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrate_node.py" output="screen"/>
+  <!-- Start orchestrator. Change node py according to the task -->
+  <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrate_node_stacking_cube_task.py" output="screen"/>
   
   <!-- Behavior Tree Visualization -->
   <node name="rqt_py_trees" pkg="rqt_py_trees" type="rqt_py_trees" output="screen"/>

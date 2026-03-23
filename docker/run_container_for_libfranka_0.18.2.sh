@@ -57,4 +57,5 @@ fi
 # If you need specific features, add command below on the docker run -it  
     # --ipc=host \    # Enable shared memory to prevent bus errors in ROS/GUI
     # -e ROS_NAMESPACE=/group_rheinrobot \ # Optional: Groups all ROS nodes under this namespace
+    # --runtime=nvidia \ # Use NVIDIA runtime for GPU support (if --gpus all is not working)
     
