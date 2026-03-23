@@ -126,6 +126,10 @@ Keep your local fork up-to-date:
 ```bash
 cd /opt/ros_ws/src/franka_zed_gazebo
 git pull --recurse-submodules
+
+# Or if you already cloned the repo:
+git submodule update --init --recursive
+
 cd ../..
 ```
 
