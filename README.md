@@ -3,8 +3,9 @@
 An integrated ROS workspace for controlling the **Franka Emika Panda Robot** with **ZED2 Camera (Eye-to-Hand configuration)** in both **simulation (Gazebo)** and **real robot** environments. This project includes support for multiple tasks (manipulation, grasping, flipping, stacking) with dual robot configurations (**Poseidon** and **Athena**).
 
 <p align="center">
-  <img src="images/gazebo.png" width="600"/>
+  <img width="1629" height="1005" alt="Screenshot from 2026-01-22 17-25-34" src="https://github.com/user-attachments/assets/f3750905-84f4-4391-939b-ca188d4a455a" />
 </p>
+
 
 ---
 
