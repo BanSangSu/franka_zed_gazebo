@@ -1,4 +1,4 @@
-# Franka ZED Gazebo - Complete Guide
+# 🐼 Franka ZED Noetic
 
 An integrated ROS workspace for controlling the **Franka Emika Panda Robot** with **ZED2 Camera (Eye-to-Hand configuration)** in both **simulation (Gazebo)** and **real robot** environments. This project includes support for multiple tasks (manipulation, grasping, flipping, stacking) with dual robot configurations (**Poseidon** and **Athena**).
 
