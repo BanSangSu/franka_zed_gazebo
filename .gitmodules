@@ -1,0 +1,3 @@
+[submodule "scripts/contact_graspnet_pytorch"]
+	path = scripts/contact_graspnet_pytorch
+	url = https://github.com/elchun/contact_graspnet_pytorch.git
