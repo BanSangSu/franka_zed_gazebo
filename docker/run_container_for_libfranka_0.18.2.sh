@@ -46,6 +46,7 @@ else
     -e NVIDIA_DRIVER_CAPABILITIES=all \
     -e NVIDIA_VISIBLE_DEVICES=all \
     -e TERM=xterm-256color \
+    -e ROS_NAMESPACE="" \
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
     -v /dev:/dev \
     -v "${WORKSPACE_SRC}:/opt/ros_ws/src/local_src" \
