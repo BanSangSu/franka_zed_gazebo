@@ -2,11 +2,11 @@
   <!-- ZED Right Camera (zedr) -->
   <!-- For zed2i -->
   <!-- <include file="$(find zed_wrapper)/launch/zed2.launch"> -->
-  <include file="$(find zed_wrapper)/launch/zed2i.launch">
-    <arg name="camera_name" value="zedr" />
+  <include file="$(find zed_wrapper)/launch/zed2_two.launch">
+    <arg name="camera_name" value="zedl" />
 
 
-    <!-- For zed2i -->
+    <!-- For zed2 -->
     <!-- <arg name="camera_model" value="zed2" /> -->
     <arg name="camera_model" value="zed2" />
 
@@ -18,15 +18,26 @@
     <arg name="publish_tf" value="false" />
     <arg name="publish_map_tf" value="false" />
     <arg name="publish_imu_tf" value="false" /> -->
+
+
+    <!-- quaternion:
+    w: 0.9624251976282381
+    x: 0.0
+    y: 0.0
+    z: 0.2715469369561129
+  translation:
+    x: 0.24
+    y: -0.45
+    z: 0.28 -->
   </include>
 
-  <!-- Static transform for right camera -->
-  <node pkg="tf2_ros" type="static_transform_publisher" name="static_transform_publisher_zedr"
+        <!-- Static transform for right camera -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="static_transform_publisher_zedl"
         output="screen"
-        
-      args="0.8285 0.5172 0.5711
-            0.3718 0.0715 -0.9173 0.1234
+        args="1.14 0.083 0.475
+        0.36642269192206417 -0.0061070448653677365 -0.9282708195358959 -0.06332772256884563
               world base_link" />
+      
 
       <!-- Athena side camera -->
       <!-- args="1.14 0.083 0.475
@@ -34,19 +45,13 @@
               world base_link" /> -->
 
 
+              <!-- left -->
+              <!-- args=" 0.20 -0.45 0.28
+      0.0 0.0 0.2715469369561129 0.9624251976282381
+        world base_link_two" /> -->
+
+
       <!-- Posension side right camera -->
-      <!-- right -->
-      <!-- args="0.8485 0.5172 0.5711
-            0.3718 0.0715 -0.9173 0.1234
-              world base_link" /> -->
-
-      <!-- left -->
-            <!-- args="0.125474 -0.501620 0.534850
-            0.116199 -0.326420 -0.337829 -0.875111
-              world base_link_two" /> -->
-              
-
-
 
        <!-- args="0.8485 0.4672 0.5711 
              0.3718 0.0715 -0.9173 0.1234

@@ -47,7 +47,6 @@ class Config:
    PLACE_HEIGHT = 0.01##have to take into account that the gripper itself has some length when it grabs, such that it grabs in the center and there is some offset
   
    FLIPPING_X_OFFSET = 0.01
-   
    GRIPPER_OPEN_WIDTH = 0.08
    GRIPPER_FORCE = 30.0
    GRIPPER_WIDTH_MARGIN = 0.005
@@ -150,7 +149,7 @@ class BB:
    COLLISION = "collision"
    GOAL_TO_CUBE = "goal_to_cube"
    PLACED_IDS = "placed_cubes"
-   FLIPPED_IDS = "flipped_cubes"
+   FLIPPERD_IDS = "flipped_cubes"
 
 ##maybe can add the gripper distance to check if it is holding an object
 
@@ -168,7 +167,7 @@ def init_blackboard():
    bb.set(BB.COLLISION, "")
    bb.set(BB.GOAL_TO_CUBE, {})
    bb.set(BB.PLACED_IDS, {})
-   bb.set(BB.FLIPPED_IDS, {})
+   bb.set(BB.FLIPPERD_IDS, {})
    return bb
 
 
@@ -308,9 +307,9 @@ class Perceive(py_trees.behaviour.Behaviour):
                return py_trees.common.Status.FAILURE
           
            placed_dict = self.bb.get(BB.PLACED_IDS) or {}
-           flipped_dict = self.bb.get(BB.FLIPPED_IDS) or {}
+           flipped_dict = self.bb.get(BB.FLIPPERD_IDS) or {}
             # NOt sure how good this threshold is
-           THRESHOLD = 0.05 # 0.05
+           THRESHOLD = 0.05 
 
            cubes = []
            seen_placed_indices = set()
@@ -322,7 +321,6 @@ class Perceive(py_trees.behaviour.Behaviour):
                 dist = np.sqrt((new_pos.x - p_pos.x)**2 + 
                                 (new_pos.y - p_pos.y)**2 + 
                                 (new_pos.z - p_pos.z)**2)
-                # rospy.logerr(f"dist: {dist}, THRESHOLD: {THRESHOLD}")
                 if dist < THRESHOLD:
                     is_duplicate = True
                     self.scene.remove_world_object(f"cube_{i}")
@@ -338,7 +336,8 @@ class Perceive(py_trees.behaviour.Behaviour):
             else:
                 rospy.loginfo(f"Filtering out perceived cube at {new_pos.x, new_pos.y} - Space already occupied by a placed cube.")
 
-     
+           #DELETED THE DETECTION LOGIC 
+                
            self.bb.set(BB.CUBES, cubes)
            rospy.loginfo(f"[{self.name}] Found {len(cubes)} cubes")
            return py_trees.common.Status.SUCCESS
@@ -467,7 +466,7 @@ class MarkComplete(py_trees.behaviour.Behaviour):
        cube = self.bb.get(BB.SELECTED_CUBE)
        target_pose = self.bb.get(BB.TARGET_POSE)
        placed_ids = self.bb.get(BB.PLACED_IDS) or {}
-       flipped_ids = self.bb.get(BB.FLIPPED_IDS) or {}
+       flipped_ids = self.bb.get(BB.FLIPPERD_IDS) or {}
        # Update completion status
        done = self.bb.get(BB.COMPLETED)
        done.add(idx)
@@ -482,11 +481,11 @@ class MarkComplete(py_trees.behaviour.Behaviour):
 
        placed_ids[idx] = target_pose.position 
        self.bb.set(BB.PLACED_IDS, placed_ids)
-       
+
        ##added for flipped logic
 
        flipped_ids[idx] = cube['pose'].position 
-       self.bb.set(BB.FLIPPED_IDS, flipped_ids)
+       self.bb.set(BB.FLIPPERD_IDS, flipped_ids)
       
        return py_trees.common.Status.SUCCESS
 
@@ -1093,7 +1092,7 @@ def main():
    rospy.init_node('orchestrator_bt')
   
    pattern_str = rospy.get_param('~pattern_type', 'STACK').upper()
-   value = rospy.get_param('~pattern_value', '3') #FOR THIS MAYBE TRY TO HAVE EXACTLY THE SAME NUMBER OF CUBES AS VALUES 
+   value = rospy.get_param('~pattern_value', '3') #FOR THIS MAYBE TRY TO HAVE EXACTLY THE SAME NUMBER OF CUBES AS VALUES
   
    try:
        pattern = Pattern[pattern_str]

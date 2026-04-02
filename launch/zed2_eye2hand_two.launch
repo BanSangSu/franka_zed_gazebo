@@ -2,14 +2,13 @@
   <!-- ZED Right Camera (zedr) -->
   <!-- For zed2i -->
   <!-- <include file="$(find zed_wrapper)/launch/zed2.launch"> -->
-  <include file="$(find zed_wrapper)/launch/zed2i.launch">
+  <include file="$(find zed_wrapper)/launch/zed2.launch">
     <arg name="camera_name" value="zedr" />
 
 
     <!-- For zed2i -->
     <!-- <arg name="camera_model" value="zed2" /> -->
     <arg name="camera_model" value="zed2" />
-
 
     <!-- <arg name="serial_number" value="21177909" />
     <arg name="ros_params_override_path"
@@ -24,7 +23,7 @@
   <node pkg="tf2_ros" type="static_transform_publisher" name="static_transform_publisher_zedr"
         output="screen"
         
-      args="0.8285 0.5172 0.5711
+      args="0.8485 0.5172 0.5711
             0.3718 0.0715 -0.9173 0.1234
               world base_link" />
 
@@ -35,18 +34,6 @@
 
 
       <!-- Posension side right camera -->
-      <!-- right -->
-      <!-- args="0.8485 0.5172 0.5711
-            0.3718 0.0715 -0.9173 0.1234
-              world base_link" /> -->
-
-      <!-- left -->
-            <!-- args="0.125474 -0.501620 0.534850
-            0.116199 -0.326420 -0.337829 -0.875111
-              world base_link_two" /> -->
-              
-
-
 
        <!-- args="0.8485 0.4672 0.5711 
              0.3718 0.0715 -0.9173 0.1234
@@ -69,34 +56,47 @@
               <!-- 0.37194401469152666 0.07157716575364947 -0.9172819763062685 0.12299648458996869 -->
 
 
-<!-- rosrun tf static_transform_publisher 0.8490203511285661 0.5174056515518837 0.5714417397720613               0.37194401469152666 0.07157716575364947 -0.9172819763062685 0.12299648458996869               panda_link0 zedr_left_camera_frame 100  -->
 
-
-  <!-- ZED Left Camera (zedl) -->
-  <!-- <include file="$(find zed_wrapper)/launch/zed2.launch">
+<include file="$(find zed_wrapper)/launch/zed2_two.launch">
     <arg name="camera_name" value="zedl" />
+
+
+    <!-- For zed2 -->
+    <!-- <arg name="camera_model" value="zed2" /> -->
     <arg name="camera_model" value="zed2" />
-    <arg name="serial_number" value="29934236" />
+
+
+    <!-- <arg name="serial_number" value="21177909" />
     <arg name="ros_params_override_path"
-         value="$(find franka_zed_gazebo)/configs/custom_zed_configs_left.yaml" />
+         value="$(find franka_zed_gazebo)/configs/custom_zed_configs_right.yaml" />
     <arg name="publish_urdf" value="true" />
     <arg name="publish_tf" value="false" />
     <arg name="publish_map_tf" value="false" />
-    <arg name="publish_imu_tf" value="false" />
-  </include> -->
+    <arg name="publish_imu_tf" value="false" /> -->
 
-  <!-- Static transform for left camera -->
-  <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="camera_link_broadcaster"
+
+    <!-- quaternion:
+    w: 0.9624251976282381
+    x: 0.0
+    y: 0.0
+    z: 0.2715469369561129
+  translation:
+    x: 0.24
+    y: -0.45
+    z: 0.28 -->
+  </include>
+
+        <!-- Static transform for right camera -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="static_transform_publisher_zedl"
         output="screen"
-        args="0.14701289805698045 -0.49165521178756444 0.5270105802649703
-              -0.13145696353538433 0.40233828143381567 0.30943671064551204 0.8515232798554752
-              panda_link0 zedl_left_camera_frame" /> -->
+      args="0.125474 -0.501620 0.534850
+            0.116199 -0.326420 -0.337829 -0.875111
+              world base_link_two" />
+
+      <!-- args=" 0.20 -0.45 0.28
+      0.0 0.0 0.2715469369561129 0.9624251976282381
+        world base_link_two" /> -->
 
 
-      <!-- Posension side left camera -->
-
-      <!-- args="0.125474 -0.501620 0.534850
-             0.116199 -0.326420 -0.337829 -0.875111
-              world base_link" /> -->
 
 </launch>

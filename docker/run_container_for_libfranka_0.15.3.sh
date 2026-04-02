@@ -4,17 +4,17 @@
 
 ## For Athena side robot, libfranka_0.18.2
 # CONTAINER_NAME="rheinrobot_franka_project_athena"
-# IMAGE_NAME="bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.18.2"
+# IMAGE_NAME="bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.18.2"
 
 ## For Poseidon side robot, libfranka_0.15.3
 # CONTAINER_NAME="rheinrobot_franka_project_poseidon"
-# IMAGE_NAME="bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.15.3"
+# IMAGE_NAME="bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.15.3"
 #
 
 set -e
 
 CONTAINER_NAME="rheinrobot_franka_project_poseidon"
-IMAGE_NAME="bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.15.3"
+IMAGE_NAME="bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.15.3"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_SRC="${SCRIPT_DIR}/ros_ws/src"
 

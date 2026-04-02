@@ -17,7 +17,8 @@
 
   
   <!-- Start orchestrator for flipping task -->
-  <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrate_node_flipping_task.py" output="screen"/>
+  <!-- <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrate_node_flipping_w_cartesian_impedance_contoller_task_faward.py" output="screen"/> -->
+  <node name="orchestrator" pkg="franka_zed_gazebo" type="orchestrate_node_flipping_w_cartesian_impedance_contoller_task.py" output="screen"/>
   
   <!-- Behavior Tree Visualization -->
   <node name="rqt_py_trees" pkg="rqt_py_trees" type="rqt_py_trees" output="screen"/>

@@ -1,13 +1,13 @@
 <launch>
 
   <!-- Start perception service -->
-  <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node.py" output="screen">
+  <!-- <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node.py" output="screen">
     <rosparam command="load" file="$(find franka_zed_gazebo)/config/perception_params.yaml"/>
+  </node> -->
+
+  <node name="perception_service" pkg="franka_zed_gazebo" type="perception_twocam.py" output="screen">
+
   </node>
-
-  <!-- <node name="perception_service" pkg="franka_zed_gazebo" type="perception_service_node_dheeraj.py" output="screen"> -->
-
-  <!-- </node> -->
 
   <!-- Start planning action server -->
   <node name="planning_action_server" pkg="franka_zed_gazebo" type="planning_action_server_node_moveit_w_cartesian.py" output="screen">

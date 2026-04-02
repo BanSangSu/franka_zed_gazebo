@@ -9,9 +9,9 @@
   <include file="$(find panda_moveit_config)/launch/franka_control.launch" pass_all_args="true" />
 
   <!-- Calibration: a ZED + static TFs about poseidon -->
-  <!-- <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand_two.launch" /> -->
+  <!-- <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand.launch" /> -->
   <!-- <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand_second.launch" /> -->
-  <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand.launch" />
+  <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand_two.launch" />
 
   <!-- For Flipping Task: Type the code below to load the cartesian impedance controller -->
   <!-- rosservice call /controller_manager/load_controller "name: 'cartesian_impedance_example_controller'" -->

@@ -64,8 +64,8 @@ class PlanningActionServer:
        self.move_group.allow_replanning(True)
       
        # Set velocity and acceleration scaling
-       self.max_velocity = rospy.get_param('~max_velocity', 0.20) # 0.15
-       self.max_acceleration = rospy.get_param('~max_acceleration', 0.15) # 0.10
+       self.max_velocity = rospy.get_param('~max_velocity', 0.30) # 0.15
+       self.max_acceleration = rospy.get_param('~max_acceleration', 0.30) # 0.10
        self.move_group.set_max_velocity_scaling_factor(self.max_velocity)
        self.move_group.set_max_acceleration_scaling_factor(self.max_acceleration)
       

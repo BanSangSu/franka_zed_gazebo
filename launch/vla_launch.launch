@@ -1,0 +1,20 @@
+<launch>
+    <include file="$(find franka_zed_gazebo)/launch/zed2_eye2hand.launch" />
+    <rosparam file="$(find franka_zed_gazebo)/config/ros_controllers.yaml" command="load"/>
+
+    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
+          output="screen" args="joint_state_controller position_joint_trajectory_controller"/>
+
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"
+          respawn="false" output="screen" />
+
+    <node name="vla_policy_client" pkg="franka_zed_gazebo" type="vla_policy_client_node.py" output="screen">
+        <param name="command_topic" value="/position_joint_trajectory_controller/command" />
+        
+        <!-- If localhost doesn't work, use actual ip. -->
+        <param name="ws_url" value="ws://localhost:8000" />
+        
+        <param name="task_description" value="stack the small cube on the table" />
+        <param name="rgb_topic" value="/zedr/zed_node/left/image_rect_color" />
+    </node>
+</launch>
