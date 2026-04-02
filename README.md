@@ -46,7 +46,7 @@ cd docker/
 
 **Configuration Details:**
 - **Container Name:** `rheinrobot_franka_project_poseidon`
-- **Image:** `bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.15.3`
+- **Image:** `bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.15.3`
 - **libfranka Version:** 0.15.3
 - **Robot IP:** 192.168.2.55
 
@@ -59,7 +59,7 @@ cd docker/
 
 **Configuration Details:**
 - **Container Name:** `rheinrobot_franka_project_athena`
-- **Image:** `bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.18.2`
+- **Image:** `bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.18.2`
 - **libfranka Version:** 0.18.2
 - **Robot IP:** 10.10.10.10
 
@@ -158,7 +158,7 @@ This workspace supports two Franka Panda robots with different configurations:
 | **Robot IP** | `192.168.2.55` |
 | **libfranka Version** | 0.15.3 |
 | **Container Name** | `rheinrobot_franka_project_poseidon` |
-| **Docker Image** | `bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.15.3` |
+| **Docker Image** | `bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.15.3` |
 | **ZED Camera** | Eye-to-Hand (mounted with gripper in FoV) |
 
 ### Athena Robot
@@ -168,7 +168,7 @@ This workspace supports two Franka Panda robots with different configurations:
 | **Robot IP** | `10.10.10.10` |
 | **libfranka Version** | 0.18.2 |
 | **Container Name** | `rheinrobot_franka_project_athena` |
-| **Docker Image** | `bandi0605/rheinrobot:ban_experiments_test_0.3.9_libfranka_0.18.2` |
+| **Docker Image** | `bandi0605/rheinrobot:ban_experiments_test_0.3.9.3_libfranka_0.18.2` |
 | **ZED Camera** | Eye-to-Hand (mounted with gripper in FoV) |
 
 ---
@@ -446,4 +446,5 @@ This project is built and tested on the following software stack:
 - **Network Configuration:** Ensure the host PC can reach the robot IP address over Ethernet.
 - **GPU Optimization:** The Docker containers are configured for NVIDIA GPU support. Make sure the NVIDIA Container Runtime is installed.
 - **Virtual Environment:** The workspace uses a Python virtual environment at `/opt/ros_ws/.venv` inside the container.
+- **⚠️ VLA (Vision Language Action) model Code:** Experimental VLA integration code has been added to this repository but is **not functional**. This is for experimental purposes only and should not be relied upon for production workflows.
 
