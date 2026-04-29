@@ -2,7 +2,18 @@
 
 An integrated ROS workspace for controlling the **Franka Emika Panda Robot** with **ZED2 Camera (Eye-to-Hand configuration)** in both **simulation (Gazebo)** and **real robot** environments. This project includes support for multiple tasks (manipulation, grasping, flipping, stacking) with dual robot configurations (**Poseidon** and **Athena**).
 
+
+| **Cube Stacking** | **Cube Flipping** | **Impedance Control** |
+| :---: | :---: | :---: |
+| <img width="450" height="800" alt="stacking_cube_6x_scale_more" src="https://github.com/user-attachments/assets/e795776c-6978-40f8-8a73-19b2af9ac10a" /> | <img width="450" height="800" alt="flipping_cube_2 5x_scale_more" src="https://github.com/user-attachments/assets/131f6dd2-a55d-407b-b836-7948f91ecdc0" /> | <img width="450" height="780" alt="impedance_control_scale_more" src="https://github.com/user-attachments/assets/fa79ed5d-fbe6-44fc-aa99-e233e196e6b4" /> |
+
+
+
+
+
+
 <p align="center">
+  <h4>System Monitor: RViz, Behavior Tree, and Gazebo</h4>
   <img width="1629" height="1005" alt="Screenshot from 2026-01-22 17-25-34" src="https://github.com/user-attachments/assets/f3750905-84f4-4391-939b-ca188d4a455a" />
 </p>
 
